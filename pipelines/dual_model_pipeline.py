@@ -69,6 +69,12 @@ FEW_SHOT_DIFF_EXAMPLE = json.dumps(
     indent=2,
 )
 
+FRONTEND_STYLE_RULE = """
+Frontend styling rule:
+- For HTML/CSS deliverables, prefer a single HTML file with CSS inside a `<style>` tag.
+- Do not create a separate `.css` file unless the user explicitly asks for one.
+""".strip()
+
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
 
 
@@ -230,6 +236,11 @@ project.scope가 frontend가 아니라면 프론트엔드 파일을 억지로 �
 ```
 
 diff에 없는 변경은 절대 하지 마십시오.""".strip()
+
+    SPEC_SYSTEM_PROMPT = f"{SPEC_SYSTEM_PROMPT}\n\n{FRONTEND_STYLE_RULE}"
+    CODER_SYSTEM_PROMPT = f"{CODER_SYSTEM_PROMPT}\n\n{FRONTEND_STYLE_RULE}"
+    SINGLE_PASS_SYSTEM_PROMPT = f"{SINGLE_PASS_SYSTEM_PROMPT}\n\n{FRONTEND_STYLE_RULE}"
+    DIFF_CODER_PROMPT = f"{DIFF_CODER_PROMPT}\n\n{FRONTEND_STYLE_RULE}"
 
     def __init__(self) -> None:
         self.valves = self.Valves()

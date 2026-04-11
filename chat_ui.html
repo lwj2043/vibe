@@ -63,7 +63,8 @@
     transition: width 0.25s ease, min-width 0.25s ease;
     overflow: hidden;
   }
-  #sidebar.collapsed { width: var(--sidebar-collapsed); min-width: var(--sidebar-collapsed); }
+  #sidebar.collapsed { width: var(--sidebar-collapsed); min-width: var(--sidebar-collapsed); position: relative; z-index: 100; }
+  #sidebar.collapsed:hover { width: var(--sidebar-width); min-width: var(--sidebar-width); box-shadow: 4px 0 20px var(--shadow); }
 
   .sidebar-top {
     display: flex; align-items: center; justify-content: space-between;
@@ -78,6 +79,7 @@
   }
   .logo-text { font-size: 14px; font-weight: 600; transition: opacity 0.2s; }
   #sidebar.collapsed .logo-text { opacity: 0; width: 0; }
+  #sidebar.collapsed:hover .logo-text { opacity: 1; width: auto; }
 
   .icon-btn {
     background: none; border: none; cursor: pointer;
@@ -92,6 +94,7 @@
     transition: opacity 0.2s;
   }
   #sidebar.collapsed .sidebar-search { opacity: 0; pointer-events: none; height: 0; padding: 0; overflow: hidden; }
+  #sidebar.collapsed:hover .sidebar-search { opacity: 1; pointer-events: auto; height: auto; padding: 4px 10px 8px; }
   .search-input-wrap { position: relative; }
   .search-input-wrap svg {
     position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
@@ -120,6 +123,7 @@
   .nav-item svg { flex-shrink: 0; }
   .nav-label { transition: opacity 0.2s; }
   #sidebar.collapsed .nav-label { opacity: 0; width: 0; }
+  #sidebar.collapsed:hover .nav-label { opacity: 1; width: auto; }
 
   .sidebar-section-title {
     padding: 12px 14px 4px;
@@ -129,12 +133,14 @@
     display: flex; align-items: center; justify-content: space-between;
   }
   #sidebar.collapsed .sidebar-section-title { opacity: 0; height: 0; padding: 0; overflow: hidden; }
+  #sidebar.collapsed:hover .sidebar-section-title { opacity: 1; height: auto; padding: 12px 14px 4px; }
 
   .chat-list-wrapper {
     flex: 1; overflow-y: auto; padding: 0 6px 12px;
     transition: opacity 0.2s;
   }
   #sidebar.collapsed .chat-list-wrapper { opacity: 0; pointer-events: none; }
+  #sidebar.collapsed:hover .chat-list-wrapper { opacity: 1; pointer-events: auto; }
 
   .chat-list { display: flex; flex-direction: column; gap: 1px; }
 
@@ -269,6 +275,10 @@
   }
 
   /* Message actions */
+  .msg-time {
+    font-size: 10px; color: var(--text3); margin-top: 2px;
+  }
+  .message.user .msg-time { text-align: right; }
   .msg-actions {
     display: flex; gap: 2px; margin-top: 4px; opacity: 0;
     transition: opacity 0.15s;
@@ -316,13 +326,13 @@
   html.light .code-content { color: #2d2d2d; }
 
   /* Syntax */
-  .kw { color: #569cd6; } html.light .kw { color: #0000ff; }
-  .str { color: #ce9178; } html.light .str { color: #a31515; }
-  .cmt { color: #6a9955; } html.light .cmt { color: #008000; }
-  .fn { color: #dcdcaa; } html.light .fn { color: #795e26; }
-  .num { color: #b5cea8; } html.light .num { color: #098658; }
-  .tag { color: #4ec9b0; } html.light .tag { color: #800000; }
-  .attr { color: #9cdcfe; } html.light .attr { color: #ff0000; }
+  .hl-kw { color: #569cd6; font-weight: normal; } html.light .hl-kw { color: #0000ff; }
+  .hl-str { color: #ce9178; font-weight: normal; } html.light .hl-str { color: #a31515; }
+  .hl-cmt { color: #6a9955; font-weight: normal; } html.light .hl-cmt { color: #008000; }
+  .hl-fn { color: #dcdcaa; font-weight: normal; } html.light .hl-fn { color: #795e26; }
+  .hl-num { color: #b5cea8; font-weight: normal; } html.light .hl-num { color: #098658; }
+  .hl-tag { color: #4ec9b0; font-weight: normal; } html.light .hl-tag { color: #800000; }
+  .hl-attr { color: #9cdcfe; font-weight: normal; } html.light .hl-attr { color: #ff0000; }
 
   /* Typing */
   .typing-indicator { display: flex; gap: 4px; align-items: center; padding: 12px 0; }
@@ -599,6 +609,26 @@
     color: var(--danger); font-size: 12px; margin-bottom: 10px; min-height: 16px;
   }
   #logout-btn { margin-left: 4px; }
+  .login-switch {
+    text-align: center; margin-top: 14px; font-size: 12px; color: var(--text2);
+  }
+  .login-switch a {
+    color: var(--accent-color); cursor: pointer; text-decoration: none;
+  }
+  .login-switch a:hover { text-decoration: underline; }
+  .login-card button.secondary {
+    background: transparent; border: 1px solid var(--border); color: var(--text2);
+    margin-top: 6px;
+  }
+  .login-card button.secondary:hover { background: var(--bg3); opacity: 1; }
+  .assistant-loading { color: var(--text3); }
+  .sidebar-actions { display: flex; gap: 2px; }
+  .is-hidden { display: none; }
+  .hidden-file-input { display: none; }
+  .notes-textarea { min-height: 300px; }
+  .modal.compact { max-width: 420px; }
+  .attachment-name { font-size: 10px; padding: 4px; color: var(--text2); }
+  .prompt-card.selected { border-color: var(--accent-color); }
 </style>
 </head>
 <body>
@@ -614,6 +644,21 @@
     <input id="login-password" name="password" type="password" autocomplete="current-password" required>
     <div class="login-error" id="login-error"></div>
     <button type="submit" id="login-submit">로그인</button>
+    <div class="login-switch">계정이 없으신가요? <a onclick="showSignup()">회원가입</a></div>
+  </form>
+
+  <form class="login-card is-hidden" id="signup-form" autocomplete="off">
+    <h1>Vibe Coding</h1>
+    <p>새 계정을 만드세요</p>
+    <label for="signup-username">아이디</label>
+    <input id="signup-username" name="username" type="text" required>
+    <label for="signup-password">비밀번호</label>
+    <input id="signup-password" name="password" type="password" required>
+    <label for="signup-password2">비밀번호 확인</label>
+    <input id="signup-password2" name="password2" type="password" required>
+    <div class="login-error" id="signup-error"></div>
+    <button type="submit" id="signup-submit">회원가입</button>
+    <div class="login-switch">이미 계정이 있으신가요? <a onclick="showLogin()">로그인</a></div>
   </form>
 </div>
 
@@ -624,7 +669,7 @@
       <div class="logo-icon">VC</div>
       <span class="logo-text">Vibe Coding</span>
     </div>
-    <div style="display:flex; gap:2px;">
+    <div class="sidebar-actions">
       <button class="icon-btn" id="logout-btn" title="로그아웃">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
@@ -664,27 +709,20 @@
   </div>
 
   <div class="chat-list-wrapper">
-    <div class="sidebar-section-title" id="pinned-title" style="display:none">고정됨</div>
+    <div class="sidebar-section-title is-hidden" id="pinned-title">고정됨</div>
     <div class="chat-list" id="pinned-list"></div>
 
     <div class="sidebar-section-title">채팅</div>
     <div class="chat-list" id="chat-list"></div>
   </div>
 
-  <div class="sidebar-user" onclick="openModal('settings-modal')">
-    <div class="user-avatar">이</div>
-    <span class="user-name">이우진</span>
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text3)">
-      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-    </svg>
-  </div>
 </div>
 
 <!-- ════════ Main ════════ -->
 <div id="main">
   <div id="chat-container">
     <div id="welcome">
-      <div class="welcome-icon">OI</div>
+      <div class="welcome-icon">VC</div>
       <div class="welcome-title">무엇을 도와드릴까요?</div>
       <div class="suggestions">
         <div class="suggestion-label">
@@ -724,10 +762,6 @@
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
             </svg>
           </button>
-          <button class="model-chip" id="model-chip" title="모델 선택">
-            <span id="model-chip-name">GPT-4o</span>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-          </button>
         </div>
         <button id="send-btn" title="전송 (Enter)" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21L23 12 2 3v7l15 2-15 2v7z"/></svg>
@@ -736,7 +770,7 @@
     </div>
     <div class="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈 · Ctrl+N 새 채팅 · Ctrl+K 검색</div>
   </div>
-  <input type="file" id="file-input" accept="image/*,.pdf,.txt,.md" multiple style="display:none">
+  <input type="file" class="hidden-file-input" id="file-input" accept="image/*,.pdf,.txt,.md" multiple>
 </div>
 
 <!-- ════════ Preview Panel ════════ -->
@@ -809,7 +843,7 @@
             <div class="setting-desc">JSON 파일에서 복원</div>
           </div>
           <button class="modal-btn" onclick="document.getElementById('import-input').click()">가져오기</button>
-          <input type="file" id="import-input" accept=".json" style="display:none">
+          <input type="file" class="hidden-file-input" id="import-input" accept=".json">
         </div>
       </div>
     </div>
@@ -826,7 +860,7 @@
       </button>
     </div>
     <div class="modal-body">
-      <textarea class="textarea-input" id="notes-textarea" placeholder="여기에 메모를 작성하세요..." style="min-height:300px"></textarea>
+      <textarea class="textarea-input notes-textarea" id="notes-textarea" placeholder="여기에 메모를 작성하세요..."></textarea>
     </div>
     <div class="modal-footer">
       <button class="modal-btn primary" onclick="saveNotes()">저장</button>
@@ -836,7 +870,7 @@
 
 <!-- ════════ Model Modal ════════ -->
 <div class="modal-backdrop" id="model-modal">
-  <div class="modal" style="max-width:420px">
+  <div class="modal compact">
     <div class="modal-header">
       <div class="modal-title">모델 선택</div>
       <button class="icon-btn" onclick="closeModal('model-modal')">
@@ -858,12 +892,7 @@
  * State
  * ════════════════════════════════════════════ */
 const MODELS = [
-  { id: 'gpt-4o', name: 'GPT-4o', desc: 'OpenAI · 멀티모달 최강' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o mini', desc: 'OpenAI · 빠르고 저렴' },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', desc: 'Anthropic · 코딩 추천' },
-  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', desc: 'Anthropic · 최고 성능' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', desc: 'Google · 긴 컨텍스트' },
-  { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', desc: 'Meta · 오픈소스' },
+  { id: 'dual-model', name: 'Dual Model', desc: 'Ollama · Spec + Coder 파이프라인' },
 ];
 
 const STATE = {
@@ -873,7 +902,6 @@ const STATE = {
   settings: {
     theme: 'dark',
     fontSize: 14,
-    defaultModel: 'gpt-4o',
     temperature: 0.7,
     autoplay: false,
     ttsVoice: '',
@@ -893,21 +921,152 @@ const messagesEl = $('messages');
 const chatInput = $('chat-input');
 const sendBtn = $('send-btn');
 const previewPanel = $('preview-panel');
+const DEFAULT_MODEL_ID = 'dual-model';
+let draftModel = DEFAULT_MODEL_ID;
 
 /* ════════════════════════════════════════════
- * Persistence
+ * Persistence (계정별 분리)
  * ════════════════════════════════════════════ */
+function _stateKey() {
+  const user = localStorage.getItem('vibe_auth_user') || '_guest';
+  return `vibe_chat_state_${user}`;
+}
+
+function defaultSettings() {
+  return {
+    theme: 'dark',
+    fontSize: 14,
+    temperature: 0.7,
+    autoplay: false,
+    ttsVoice: '',
+  };
+}
+
+function normalizeMessage(message = {}) {
+  const timestamp = Number.isFinite(message.timestamp) ? message.timestamp : null;
+  const role = message.role === 'assistant' ? 'assistant' : 'user';
+  return {
+    id: typeof message.id === 'string' && message.id ? message.id : uid(),
+    requestId: typeof message.requestId === 'string' && message.requestId ? message.requestId : null,
+    role,
+    content: typeof message.content === 'string' ? message.content : String(message.content ?? ''),
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
+    timestamp,
+    createdAt: typeof message.createdAt === 'string' && message.createdAt
+      ? message.createdAt
+      : (timestamp === null ? null : new Date(timestamp).toISOString()),
+    durationMs: Number.isFinite(message.durationMs) ? message.durationMs : null,
+  };
+}
+
+function normalizeChat(chat = {}) {
+  const createdAt = Number.isFinite(chat.createdAt) ? chat.createdAt : Date.now();
+  const messages = Array.isArray(chat.messages)
+    ? chat.messages.filter(m => m && typeof m === 'object').map(normalizeMessage)
+    : [];
+  const latestTimestamp = messages.length ? messages[messages.length - 1].timestamp : createdAt;
+
+  return {
+    id: typeof chat.id === 'string' && chat.id ? chat.id : uid(),
+    title: typeof chat.title === 'string' && chat.title ? chat.title : '새 채팅',
+    messages,
+    systemPrompt: typeof chat.systemPrompt === 'string' ? chat.systemPrompt : '',
+    model: typeof chat.model === 'string' && chat.model ? chat.model : DEFAULT_MODEL_ID,
+    pinned: Boolean(chat.pinned),
+    createdAt,
+    updatedAt: Number.isFinite(chat.updatedAt) ? chat.updatedAt : latestTimestamp,
+  };
+}
+
+function normalizeStateShape(raw = {}) {
+  const rawSettings = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};
+  const { defaultModel: _ignoredDefaultModel, ...persistedSettings } = rawSettings;
+  const chats = Array.isArray(raw.chats) ? raw.chats.map(normalizeChat) : [];
+  const currentChatId = chats.some(chat => chat.id === raw.currentChatId)
+    ? raw.currentChatId
+    : (chats[0] ? chats[0].id : null);
+
+  return {
+    chats,
+    currentChatId,
+    notes: typeof raw.notes === 'string' ? raw.notes : '',
+    settings: { ...defaultSettings(), ...persistedSettings },
+  };
+}
+
+function buildMessage(role, content, extra = {}) {
+  const timestamp = Number.isFinite(extra.timestamp) ? extra.timestamp : Date.now();
+  return {
+    id: typeof extra.id === 'string' && extra.id ? extra.id : uid(),
+    requestId: typeof extra.requestId === 'string' && extra.requestId ? extra.requestId : null,
+    role,
+    content: typeof content === 'string' ? content : String(content ?? ''),
+    attachments: Array.isArray(extra.attachments) ? extra.attachments : [],
+    timestamp,
+    createdAt: typeof extra.createdAt === 'string' && extra.createdAt
+      ? extra.createdAt
+      : new Date(timestamp).toISOString(),
+    durationMs: Number.isFinite(extra.durationMs) ? extra.durationMs : null,
+  };
+}
+
+function resetState() {
+  STATE.chats = [];
+  STATE.currentChatId = null;
+  STATE.notes = '';
+  STATE.settings = defaultSettings();
+  draftModel = DEFAULT_MODEL_ID;
+}
+
 function loadState() {
   try {
-    const s = localStorage.getItem('vibe_chat_state');
+    const s = localStorage.getItem(_stateKey());
     if (s) {
-      const parsed = JSON.parse(s);
-      Object.assign(STATE, parsed);
+      Object.assign(STATE, normalizeStateShape(JSON.parse(s)));
     }
   } catch (e) { console.error(e); }
 }
+
+async function loadStateFromServer() {
+  if (!isLoggedIn()) return;
+  try {
+    const res = await fetch('/api/chats', { headers: authHeaders() });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) return;
+    const data = await res.json();
+    Object.assign(STATE, normalizeStateShape({
+      chats: data.chats,
+      currentChatId: data.currentChatId,
+      notes: STATE.notes,
+      settings: { ...STATE.settings, ...(data.settings || {}) },
+    }));
+    saveStateLocal();
+    renderChatList();
+    renderMessages();
+  } catch (e) { console.error('서버에서 채팅 로드 실패:', e); }
+}
+
+let _saveTimer = null;
 function saveState() {
-  localStorage.setItem('vibe_chat_state', JSON.stringify(STATE));
+  saveStateLocal();
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveStateToServer, 1000);
+}
+
+function saveStateLocal() {
+  localStorage.setItem(_stateKey(), JSON.stringify(STATE));
+}
+
+async function saveStateToServer() {
+  if (!isLoggedIn()) return;
+  try {
+    const res = await fetch('/api/chats', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ chats: STATE.chats, settings: STATE.settings }),
+    });
+    if (res.status === 401) { logout(); return; }
+  } catch (e) { console.error('서버 저장 실패:', e); }
 }
 
 /* ════════════════════════════════════════════
@@ -921,7 +1080,7 @@ function createChat() {
     title: '새 채팅',
     messages: [],
     systemPrompt: '',
-    model: STATE.settings.defaultModel,
+    model: draftModel,
     pinned: false,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -982,7 +1141,7 @@ function renderChatList(filter = '') {
   const pinned = filtered.filter(c => c.pinned);
   const regular = filtered.filter(c => !c.pinned);
 
-  $('pinned-title').style.display = pinned.length ? '' : 'none';
+  $('pinned-title').classList.toggle('is-hidden', !pinned.length);
   $('pinned-list').innerHTML = pinned.map(renderChatItem).join('');
   $('chat-list').innerHTML = regular.map(renderChatItem).join('');
 
@@ -1029,6 +1188,7 @@ function renderMessages() {
     welcome.classList.remove('hidden');
     messagesEl.innerHTML = '';
     sidebar.classList.remove('collapsed');
+    updateModelChip();
     return;
   }
   welcome.classList.add('hidden');
@@ -1039,10 +1199,50 @@ function renderMessages() {
   scrollToBottom();
 }
 
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    const precision = seconds < 10 ? 1 : 0;
+    return `${seconds.toFixed(precision)}초`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds - (minutes * 60);
+  if (remainingSeconds < 1) return `${minutes}분`;
+
+  const precision = remainingSeconds < 10 ? 1 : 0;
+  return `${minutes}분 ${remainingSeconds.toFixed(precision)}초`;
+}
+
+function getElapsedLabel(chat, index, msg) {
+  if (msg.role !== 'assistant') return '';
+
+  let elapsedMs = Number.isFinite(msg.durationMs) ? msg.durationMs : null;
+  if (elapsedMs === null) {
+    const previousMessage = chat.messages[index - 1];
+    if (
+      previousMessage &&
+      previousMessage.role === 'user' &&
+      Number.isFinite(previousMessage.timestamp) &&
+      Number.isFinite(msg.timestamp)
+    ) {
+      elapsedMs = Math.max(0, msg.timestamp - previousMessage.timestamp);
+    }
+  }
+
+  const durationText = formatDuration(elapsedMs);
+  return durationText ? `소요 시간 ${durationText}` : '';
+}
+
 function renderMessage(msg, index) {
   const div = document.createElement('div');
   div.className = `message ${msg.role}`;
   div.dataset.index = index;
+  const chat = getCurrentChat();
+  const elapsedLabel = chat ? getElapsedLabel(chat, index, msg) : '';
 
   if (msg.role === 'user') {
     const wrap = document.createElement('div');
@@ -1069,7 +1269,16 @@ function renderMessage(msg, index) {
     const parsed = parseMarkdown(msg.content);
     content.innerHTML = parsed.html;
     div.appendChild(content);
-    parsed.codeBlocks.forEach(cb => content.appendChild(createCodeBlock(cb.code, cb.lang)));
+    // 코드블록을 마커 위치에 정확히 삽입
+    parsed.codeBlocks.forEach((cb, i) => {
+      const marker = content.querySelector(`[data-code-marker="${i}"]`);
+      if (marker) {
+        marker.replaceWith(createCodeBlock(cb.code, cb.lang));
+      } else {
+        content.appendChild(createCodeBlock(cb.code, cb.lang));
+      }
+    });
+    if (elapsedLabel) { const t = document.createElement('div'); t.className = 'msg-time'; t.textContent = elapsedLabel; div.appendChild(t); }
     div.appendChild(buildMessageActions(msg, index));
   }
   return div;
@@ -1160,9 +1369,12 @@ function regenerate(index) {
  * ════════════════════════════════════════════ */
 function parseMarkdown(text) {
   const codeBlocks = [];
-  // Extract fenced code blocks
-  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    codeBlocks.push({ lang: lang || 'text', code: code.trimEnd() });
+  // Normalize line endings
+  text = text.replace(/\r\n/g, '\n');
+  // Extract fenced code blocks (handle language + optional extra text on first line)
+  text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, firstLine, code) => {
+    const lang = firstLine.trim().split(/\s/)[0] || 'text';
+    codeBlocks.push({ lang, code: code.trimEnd() });
     return `\u0000CODE_${codeBlocks.length - 1}\u0000`;
   });
   // Escape
@@ -1239,18 +1451,18 @@ function highlightCode(code, lang) {
   let s = escapeHtml(code);
   const l = lang.toLowerCase();
   if (l === 'html') {
-    s = s.replace(/(&lt;\/?)([\w-]+)/g, '$1<span class="tag">$2</span>')
-      .replace(/([\w-]+)=/g, '<span class="attr">$1</span>=')
-      .replace(/(&quot;)([^&]*)(\1)/g, '<span class="str">$1$2$3</span>');
+    s = s.replace(/(&lt;\/?)([\w-]+)/g, '$1<b class="hl-tag">$2</b>')
+      .replace(/([\w-]+)=/g, '<b class="hl-attr">$1</b>=')
+      .replace(/(&quot;)([^&]*)(\1)/g, '<b class="hl-str">$1$2$3</b>');
   } else if (l === 'css') {
-    s = s.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="cmt">$1</span>')
-      .replace(/([.#]?[\w-]+)\s*\{/g, '<span class="fn">$1</span> {')
-      .replace(/([\w-]+):/g, '<span class="attr">$1</span>:');
+    s = s.replace(/(\/\*[\s\S]*?\*\/)/g, '<b class="hl-cmt">$1</b>')
+      .replace(/([.#]?[\w-]+)\s*\{/g, '<b class="hl-fn">$1</b> {')
+      .replace(/([\w-]+):/g, '<b class="hl-attr">$1</b>:');
   } else if (['js', 'javascript', 'python', 'py'].includes(l)) {
-    s = s.replace(/(\/\/[^\n]*|#[^\n]*)/g, '<span class="cmt">$1</span>')
-      .replace(/\b(const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|def|print|in|not|and|or|True|False|None)\b/g, '<span class="kw">$1</span>')
-      .replace(/(&quot;[^&]*&quot;|&#x27;[^&]*&#x27;|`[^`]*`)/g, '<span class="str">$1</span>')
-      .replace(/\b(\d+)\b/g, '<span class="num">$1</span>');
+    s = s.replace(/(\/\/[^\n]*|#[^\n]*)/g, '<b class="hl-cmt">$1</b>')
+      .replace(/\b(const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|def|print|in|not|and|or|True|False|None)\b/g, '<b class="hl-kw">$1</b>')
+      .replace(/(&quot;[^&]*&quot;|&#x27;[^&]*&#x27;|`[^`]*`)/g, '<b class="hl-str">$1</b>')
+      .replace(/\b(\d+)\b/g, '<b class="hl-num">$1</b>');
   }
   return s;
 }
@@ -1291,18 +1503,19 @@ function sendMessage() {
 
   let chat = getCurrentChat();
   if (!chat) chat = createChat();
+  const requestId = uid();
+  const sentAt = Date.now();
 
-  chat.messages.push({
-    role: 'user',
-    content: text,
+  chat.messages.push(buildMessage('user', text, {
+    requestId,
     attachments: attachments.slice(),
-    timestamp: Date.now(),
-  });
+    timestamp: sentAt,
+  }));
 
   if (chat.title === '새 채팅') {
     chat.title = text.slice(0, 30);
   }
-  chat.updatedAt = Date.now();
+  chat.updatedAt = sentAt;
   saveState();
 
   attachments = [];
@@ -1322,15 +1535,19 @@ async function generateResponse() {
   isGenerating = true;
   updateSendBtn();
 
-  // Placeholder assistant message that we'll fill in as chunks arrive
-  const assistantMsg = { role: 'assistant', content: '', timestamp: Date.now() };
-  chat.messages.push(assistantMsg);
-  const msgIndex = chat.messages.length - 1;
-  renderMessages();
-
   const lastUser = [...chat.messages].reverse().find(m => m.role === 'user');
   const userText = lastUser ? lastUser.content : '';
+  if (lastUser && !lastUser.requestId) lastUser.requestId = uid();
 
+  // 로딩 표시
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'message assistant';
+  loadingDiv.innerHTML = '<div class="assistant-content assistant-loading">응답을 생성하고 있습니다...</div>';
+  messagesEl.appendChild(loadingDiv);
+  scrollToBottom();
+
+  let fullContent = '';
+  const responseStartedAt = Date.now();
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -1342,7 +1559,7 @@ async function generateResponse() {
     });
 
     if (res.status === 401) {
-      assistantMsg.content = '세션이 만료되었습니다. 다시 로그인해 주세요.';
+      fullContent = '세션이 만료되었습니다. 다시 로그인해 주세요.';
       logout();
       throw new Error('unauthorized');
     }
@@ -1356,28 +1573,31 @@ async function generateResponse() {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      assistantMsg.content += decoder.decode(value, { stream: true });
-      // Re-render only the assistant message in place for smooth streaming
-      const node = messagesEl.querySelector(`.message.assistant[data-index="${msgIndex}"]`);
-      if (node) {
-        node.replaceWith(renderMessage(assistantMsg, msgIndex));
-      } else {
-        renderMessages();
-      }
-      scrollToBottom();
+      fullContent += decoder.decode(value, { stream: true });
     }
   } catch (err) {
     if (err.message !== 'unauthorized') {
-      assistantMsg.content = (assistantMsg.content || '') + `\n\n⚠️ ${err.message}`;
+      fullContent = (fullContent || '') + `\n\n⚠️ ${err.message}`;
     }
-    renderMessages();
-  } finally {
-    chat.updatedAt = Date.now();
-    saveState();
-    isGenerating = false;
-    updateSendBtn();
-    if (STATE.settings.autoplay && assistantMsg.content) speak(assistantMsg.content);
   }
+
+  // 로딩 제거 후 완성된 메시지를 한번에 표시
+  loadingDiv.remove();
+  const finishedAt = Date.now();
+  const assistantMsg = buildMessage('assistant', fullContent, {
+    requestId: lastUser ? lastUser.requestId : uid(),
+    timestamp: finishedAt,
+    durationMs: Math.max(0, finishedAt - responseStartedAt),
+  });
+  chat.messages.push(assistantMsg);
+  renderMessages();
+  scrollToBottom();
+
+  chat.updatedAt = finishedAt;
+  saveState();
+  isGenerating = false;
+  updateSendBtn();
+  if (STATE.settings.autoplay && assistantMsg.content) speak(assistantMsg.content);
 }
 
 
@@ -1441,7 +1661,7 @@ function handleFiles(files) {
 function renderAttachments() {
   $('attachment-preview').innerHTML = attachments.map((a, i) =>
     `<div class="attachment-preview-item">
-      ${a.type.startsWith('image/') ? `<img src="${a.data}">` : `<div style="font-size:10px; padding:4px; color:var(--text2)">${escapeHtml(a.name.slice(0,12))}</div>`}
+      ${a.type.startsWith('image/') ? `<img src="${a.data}">` : `<div class="attachment-name">${escapeHtml(a.name.slice(0,12))}</div>`}
       <button class="remove-attach" onclick="removeAttachment(${i})">×</button>
     </div>`
   ).join('');
@@ -1471,9 +1691,9 @@ function switchSettingsTab(tab) {
 
 function populateModels() {
   const chat = getCurrentChat();
-  const current = chat ? chat.model : STATE.settings.defaultModel;
+  const current = chat ? chat.model : draftModel;
   $('model-list').innerHTML = MODELS.map(m =>
-    `<div class="prompt-card" onclick="selectModel('${m.id}')" style="${m.id===current?'border-color:var(--accent-color)':''}">
+    `<div class="prompt-card${m.id===current ? ' selected' : ''}" onclick="selectModel('${m.id}')">
       <div class="prompt-card-title">${m.name} ${m.id===current?'✓':''}</div>
       <div class="prompt-card-desc">${m.desc}</div>
     </div>`
@@ -1482,16 +1702,18 @@ function populateModels() {
 function selectModel(id) {
   const chat = getCurrentChat();
   if (chat) { chat.model = id; saveState(); }
-  else { STATE.settings.defaultModel = id; saveState(); }
+  else { draftModel = id; }
   updateModelChip();
   closeModal('model-modal');
   toast(`모델 변경: ${MODELS.find(m=>m.id===id).name}`);
 }
 function updateModelChip() {
+  const el = $('model-chip-name');
+  if (!el) return;
   const chat = getCurrentChat();
-  const id = chat ? chat.model : STATE.settings.defaultModel;
+  const id = chat ? chat.model : draftModel;
   const model = MODELS.find(m => m.id === id);
-  $('model-chip-name').textContent = model ? model.name : id;
+  el.textContent = model ? model.name : id;
 }
 
 function saveNotes() {
@@ -1594,11 +1816,6 @@ function isLoggedIn() {
   return !!localStorage.getItem('vibe_auth_token');
 }
 
-function showLogin() {
-  $('login-overlay').classList.remove('hidden');
-  $('login-username').focus();
-}
-
 function hideLogin() {
   $('login-overlay').classList.add('hidden');
 }
@@ -1609,7 +1826,25 @@ async function logout() {
   } catch {}
   localStorage.removeItem('vibe_auth_token');
   localStorage.removeItem('vibe_auth_user');
+  resetState();
+  renderChatList();
+  renderMessages();
   showLogin();
+}
+
+function showSignup() {
+  $('login-overlay').classList.remove('hidden');
+  $('login-form').classList.add('is-hidden');
+  $('signup-form').classList.remove('is-hidden');
+  $('signup-error').textContent = '';
+  $('signup-username').focus();
+}
+function showLogin() {
+  $('login-overlay').classList.remove('hidden');
+  $('signup-form').classList.add('is-hidden');
+  $('login-form').classList.remove('is-hidden');
+  $('login-error').textContent = '';
+  $('login-username').focus();
 }
 
 async function handleLogin(e) {
@@ -1636,11 +1871,49 @@ async function handleLogin(e) {
     localStorage.setItem('vibe_auth_user', data.username);
     $('login-password').value = '';
     hideLogin();
+    resetState();
+    loadState();
+    loadStateFromServer();
   } catch (err) {
     errEl.textContent = err.message;
   } finally {
     btn.disabled = false;
     btn.textContent = '로그인';
+  }
+}
+
+async function handleSignup(e) {
+  e.preventDefault();
+  const username = $('signup-username').value.trim();
+  const password = $('signup-password').value;
+  const password2 = $('signup-password2').value;
+  const errEl = $('signup-error');
+  const btn = $('signup-submit');
+  errEl.textContent = '';
+  if (password !== password2) { errEl.textContent = '비밀번호가 일치하지 않습니다'; return; }
+  btn.disabled = true;
+  btn.textContent = '가입 중...';
+  try {
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || '회원가입 실패');
+    }
+    toast('회원가입 완료! 로그인해주세요');
+    $('signup-username').value = '';
+    $('signup-password').value = '';
+    $('signup-password2').value = '';
+    showLogin();
+    $('login-username').value = username;
+  } catch (err) {
+    errEl.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '회원가입';
   }
 }
 
@@ -1654,8 +1927,9 @@ function init() {
 
   // Auth wiring
   $('login-form').addEventListener('submit', handleLogin);
+  $('signup-form').addEventListener('submit', handleSignup);
   $('logout-btn').onclick = logout;
-  if (isLoggedIn()) hideLogin(); else showLogin();
+  if (isLoggedIn()) { hideLogin(); loadStateFromServer(); } else showLogin();
 
   $('toggle-sidebar').onclick = () => sidebar.classList.toggle('collapsed');
   $('new-chat-btn').onclick = () => { createChat(); chatInput.focus(); };
@@ -1674,7 +1948,6 @@ function init() {
   $('attach-btn').onclick = () => $('file-input').click();
   $('file-input').onchange = (e) => handleFiles(e.target.files);
   $('mic-btn').onclick = startVoiceInput;
-  $('model-chip').onclick = () => openModal('model-modal');
 
   // Settings
   $('theme-select').onchange = (e) => { STATE.settings.theme = e.target.value; saveState(); applyTheme(); };

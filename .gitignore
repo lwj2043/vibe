@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+.claude/
 config.json
 pipelines/config.json
 generated_projects/*
@@ -8,7 +9,9 @@ pipelines/__init__/
 pipelines/dual_model_pipeline/
 pipelines/failed/
 users.json
-chat_logs/aa.json
+chat_logs/*
+!chat_logs/.gitkeep
 server.err.log
 server.out.log
 server.log
+users.json
