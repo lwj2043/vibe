@@ -107,16 +107,6 @@ http://127.0.0.1:8000
 
 현재 저장된 계정 정보는 `users.json`에 PBKDF2 해시 형태로 저장됩니다.
 
-## API 요약
-
-- `GET /` : 채팅 UI 제공
-- `POST /api/login` : 로그인
-- `POST /api/logout` : 로그아웃
-- `POST /api/register` : 회원가입
-- `GET /api/chats` : 현재 사용자 채팅 목록 조회
-- `PUT /api/chats` : 채팅 및 설정 저장
-- `POST /api/chat` : 모델 응답 스트리밍
-
 ## 데이터 저장 방식
 
 - 사용자 정보: `users.json`
@@ -139,5 +129,5 @@ http://127.0.0.1:8000
 ## 개발 메모
 
 - UI는 `chat_ui.html` 단일 파일 구조입니다.
-- 백엔드는 `server.py` 하나로 라우트와 저장 로직을 처리합니다.
+- 백엔드는 `server.py` 하나로 라우트(URL 요청)와 저장 로직을 처리합니다.
 - Ollama 연결 문제가 있으면 먼저 `pipelines/config.json`의 `ollama_url`과 모델명을 확인하세요.
