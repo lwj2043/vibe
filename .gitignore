@@ -7,3 +7,8 @@ generated_projects/*
 pipelines/__init__/
 pipelines/dual_model_pipeline/
 pipelines/failed/
+users.json
+chat_logs/aa.json
+server.err.log
+server.out.log
+server.log
