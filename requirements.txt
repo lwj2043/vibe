@@ -1,6 +1,0 @@
-httpx>=0.27
-pydantic>=2.6
-fastapi>=0.110
-uvicorn[standard]>=0.27
-# anthropic SDK는 선택 사항입니다. httpx 직접 호출 방식을 사용하므로 설치 불필요.
-# anthropic>=0.25

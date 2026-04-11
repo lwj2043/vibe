@@ -7,3 +7,6 @@ generated_projects/*
 pipelines/__init__/
 pipelines/dual_model_pipeline/
 pipelines/failed/
+users.json
+chat_logs/*
+!chat_logs/.gitkeep
