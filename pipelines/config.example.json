@@ -1,0 +1,6 @@
+{
+  "_comment": "원격 Ollama 서버를 쓰려면 ollama_url에 해당 IP와 포트를 넣습니다.",
+  "ollama_url": "http://host.docker.internal:11434",
+  "plan_model": "모델명 입력",
+  "dev_model": "모델명 입력"
+}

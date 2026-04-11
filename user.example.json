@@ -1,0 +1,8 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "password_hash": "REPLACE_WITH_PBKDF2_SALT_AND_HASH"
+    }
+  ]
+}
