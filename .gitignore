@@ -10,12 +10,7 @@ pipelines/dual_model_pipeline/
 pipelines/failed/
 users.json
 chat_logs/*
-<<<<<<< HEAD
-!chat_logs/.gitkeep
-=======
 !chat_logs/.gitkeep
 server.err.log
 server.out.log
 server.log
-users.json
->>>>>>> 430e74e6ab27edfad388ac1af5940c059010661d
