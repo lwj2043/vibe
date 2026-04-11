@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+config.json
+pipelines/config.json
+generated_projects/*
+!generated_projects/.gitkeep
+pipelines/__init__/
+pipelines/dual_model_pipeline/
+pipelines/failed/

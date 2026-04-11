@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kill 45430)",
+      "Bash(~/miniconda3/bin/python -c \"import uvicorn, gradio; print\\(''OK''\\)\")",
+      "Bash(~/miniconda3/bin/python -c \"import gradio; print\\(gradio.__version__\\)\")",
+      "Bash(curl -s http://127.0.0.1:52806/health)",
+      "Bash(python3 -)",
+      "Bash(curl -sS -m 5 http://192.168.100.13:11434/api/tags)",
+      "Bash(echo \"EXIT=$?\")"
+    ]
+  }
+}
