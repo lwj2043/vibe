@@ -24,6 +24,8 @@
     --shadow: rgba(0,0,0,0.5);
     --sidebar-width: 240px;
     --sidebar-collapsed: 56px;
+    --collapsed-icon-pad-x: 10px;
+    --collapsed-icon-pad-y: 8px;
   }
 
   html.light {
@@ -68,10 +70,19 @@
 
   .sidebar-top {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 10px;
+    padding: 10px;
     gap: 8px;
+    height: 52px;            /* 펼침/접힘 동일 높이 유지 */
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+  #sidebar.collapsed:not(:hover) .sidebar-top {
+    justify-content: center;
+    padding: 10px 0;
+    height: 52px;            /* 접힌 상태에서도 동일 */
   }
   .sidebar-logo { display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; }
+  #sidebar.collapsed:not(:hover) .sidebar-logo { display: none; }
   .logo-icon {
     width: 28px; height: 28px; background: var(--text); border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
@@ -88,13 +99,35 @@
     flex-shrink: 0; transition: background 0.15s;
   }
   .icon-btn:hover { background: var(--bg3); color: var(--text); }
+  .icon-btn svg { display: block; }
 
   .sidebar-search {
     padding: 4px 10px 8px;
+    height: 44px;            /* 펼침/접힘 동일 높이 예약 */
+    box-sizing: border-box;
+    flex-shrink: 0;
     transition: opacity 0.2s;
+    position: relative;
   }
-  #sidebar.collapsed .sidebar-search { opacity: 0; pointer-events: none; height: 0; padding: 0; overflow: hidden; }
-  #sidebar.collapsed:hover .sidebar-search { opacity: 1; pointer-events: auto; height: auto; padding: 4px 10px 8px; }
+  /* 접힌 상태: 입력창 대신 가운데에 검색 아이콘 버튼 */
+  #sidebar.collapsed:not(:hover) .sidebar-search {
+    padding: 4px 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #sidebar.collapsed:not(:hover) .search-input-wrap { display: none; }
+  .sidebar-search-mini {
+    display: none;
+    width: 32px; height: 32px;
+    border: none; background: none;
+    color: var(--text2);
+    border-radius: 8px;
+    cursor: pointer;
+    align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .sidebar-search-mini:hover { background: var(--bg3); color: var(--text); }
+  #sidebar.collapsed:not(:hover) .sidebar-search-mini { display: flex; }
+  #sidebar.collapsed:hover .sidebar-search { padding: 4px 10px 8px; }
   .search-input-wrap { position: relative; }
   .search-input-wrap svg {
     position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
@@ -113,10 +146,12 @@
   }
   .nav-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    padding: 0 10px; border-radius: 8px; cursor: pointer;
     color: var(--text2); font-size: 13px;
     white-space: nowrap; overflow: hidden;
     border: none; background: none; text-align: left; width: 100%;
+    height: 36px;             /* 펼침/접힘 동일 높이 유지 */
+    box-sizing: border-box;
     transition: background 0.15s, color 0.15s;
   }
   .nav-item:hover { background: var(--bg3); color: var(--text); }
@@ -124,6 +159,13 @@
   .nav-label { transition: opacity 0.2s; }
   #sidebar.collapsed .nav-label { opacity: 0; width: 0; }
   #sidebar.collapsed:hover .nav-label { opacity: 1; width: auto; }
+  #sidebar.collapsed:not(:hover) .nav-item {
+    padding: 0;               /* 가로 정렬은 justify-content 로 통일 */
+    gap: 0;
+    height: 36px;
+    justify-content: center;
+  }
+  #sidebar.collapsed:not(:hover) .sidebar-nav { padding: 4px 0 8px; }
 
   .sidebar-section-title {
     padding: 12px 14px 4px;
@@ -249,8 +291,21 @@
   .assistant-content h1 { font-size: 20px; font-weight: 700; }
   .assistant-content h2 { font-size: 17px; font-weight: 700; }
   .assistant-content h3 { font-size: 15px; font-weight: 700; }
-  .assistant-content ul, .assistant-content ol { padding-left: 22px; }
-  .assistant-content li { margin-bottom: 4px; }
+  .assistant-content { counter-reset: md-ol; }
+  .assistant-content h1, .assistant-content h2, .assistant-content h3 { counter-reset: md-ol; }
+  .assistant-content ul { padding-left: 20px; }
+  .assistant-content ul li { margin-bottom: 4px; }
+  /* 모델이 "1." 만 반복해서 만드는 번호 목록을 자동 증가시키고 들여쓰기를 제거 */
+  .assistant-content ol { padding-left: 0; margin-left: 0; list-style: none; }
+  .assistant-content ol > li {
+    counter-increment: md-ol;
+    padding-left: 1.6em; position: relative; margin-bottom: 4px;
+  }
+  .assistant-content ol > li::before {
+    content: counter(md-ol) ".";
+    position: absolute; left: 0; top: 0;
+    font-weight: 600; color: var(--text);
+  }
   .assistant-content a { color: var(--accent-color); text-decoration: underline; }
   .assistant-content code:not(pre code) {
     background: var(--bg3); padding: 2px 6px; border-radius: 4px;
@@ -621,15 +676,296 @@
     margin-top: 6px;
   }
   .login-card button.secondary:hover { background: var(--bg3); opacity: 1; }
-  .assistant-loading { color: var(--text3); }
+  .assistant-loading { color: var(--text3); display: flex; align-items: center; gap: 8px; }
+  .assistant-loading-text { display: inline-flex; align-items: baseline; }
+  .assistant-loading-dots { display: inline-flex; margin-left: 2px; }
+  .assistant-loading-dots span {
+    display: inline-block;
+    animation: dotWave 1.2s ease-in-out infinite;
+  }
+  .assistant-loading-dots span:nth-child(1) { animation-delay: 0s; }
+  .assistant-loading-dots span:nth-child(2) { animation-delay: 0.15s; }
+  .assistant-loading-dots span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dotWave {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  /* Run mode select (실행 모드 드롭다운) */
+  .run-mode-select {
+    background: var(--bg2);
+    color: var(--text1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+  }
+  .run-mode-select:hover { background: var(--bg3); }
+
+  /* ── Spec confirm: document-style editor ─────────────────────── */
+  .spec-doc {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin: 8px 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.6;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+  .spec-doc-header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+  }
+  .spec-doc-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text1);
+    margin: 0 0 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .spec-doc-subtitle {
+    font-size: 13px;
+    color: var(--text3);
+  }
+  .spec-section {
+    margin: 18px 0;
+  }
+  .spec-section h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 10px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .spec-field {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 6px 0;
+  }
+  .spec-field-label {
+    flex: 0 0 90px;
+    font-size: 12px;
+    color: var(--text3);
+    font-weight: 500;
+  }
+  .spec-field-value {
+    flex: 1;
+    min-width: 0;
+  }
+  .spec-input, .spec-textarea {
+    width: 100%;
+    background: transparent;
+    color: var(--text1);
+    border: none;
+    border-bottom: 1px solid transparent;
+    padding: 2px 4px;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s, background 0.15s;
+    border-radius: 3px;
+  }
+  .spec-input:hover, .spec-textarea:hover {
+    border-bottom-color: var(--border);
+  }
+  .spec-input:focus, .spec-textarea:focus {
+    background: var(--bg1);
+    border-bottom-color: var(--accent, #4f8cff);
+  }
+  .spec-textarea {
+    resize: vertical;
+    min-height: 52px;
+    line-height: 1.5;
+  }
+  .spec-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .spec-list-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    position: relative;
+  }
+  .spec-list-item::before {
+    content: "•";
+    color: var(--text3);
+    flex: 0 0 auto;
+    padding-left: 4px;
+  }
+  .spec-list-item .spec-input {
+    font-size: 14px;
+  }
+  .spec-list-item .spec-item-path {
+    flex: 0 0 35%;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  .spec-list-item .spec-item-role {
+    flex: 1;
+  }
+  .spec-item-sep {
+    color: var(--text3);
+    flex: 0 0 auto;
+    font-size: 12px;
+  }
+  .spec-remove-btn {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--text3);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .spec-list-item:hover .spec-remove-btn { opacity: 1; }
+  .spec-remove-btn:hover { background: rgba(255, 80, 80, 0.15); color: #ff5050; }
+  .spec-add-btn {
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text3);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .spec-add-btn:hover {
+    border-color: var(--accent, #4f8cff);
+    color: var(--accent, #4f8cff);
+  }
+  .spec-readonly-item {
+    padding: 8px 12px;
+    background: var(--bg1);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .spec-readonly-item .spec-readonly-name {
+    font-weight: 600;
+    color: var(--text1);
+    margin-bottom: 2px;
+  }
+  .spec-readonly-item .spec-readonly-meta {
+    font-size: 12px;
+    color: var(--text3);
+  }
+  .spec-doc-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .spec-doc-actions button {
+    padding: 7px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg1);
+    color: var(--text1);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .spec-doc-actions button:hover { background: var(--bg3); }
+  .spec-doc-actions button.primary {
+    background: var(--accent, #4f8cff);
+    border-color: var(--accent, #4f8cff);
+    color: white;
+  }
+  .spec-doc-actions button.primary:hover { opacity: 0.9; background: var(--accent, #4f8cff); }
   .sidebar-actions { display: flex; gap: 2px; }
+  #sidebar.collapsed:not(:hover) .sidebar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  #sidebar.collapsed:not(:hover) .sidebar-actions {
+    justify-content: center;
+  }
+  #sidebar.collapsed:not(:hover) #settings-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 8px;
+  }
+  #sidebar.collapsed:not(:hover) #logout-btn,
+  #sidebar.collapsed:not(:hover) #toggle-sidebar {
+    display: none;
+  }
   .is-hidden { display: none; }
   .hidden-file-input { display: none; }
   .notes-textarea { min-height: 300px; }
   .modal.compact { max-width: 420px; }
   .attachment-name { font-size: 10px; padding: 4px; color: var(--text2); }
   .prompt-card.selected { border-color: var(--accent-color); }
+
+  /* ── VSCode-style code highlighting (Dark+ palette) ─────────────── */
+  .code-content pre, .code-content code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .code-content { background: #1e1e1e; color: #d4d4d4; padding: 12px 14px; border-radius: 0 0 8px 8px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+  :root[data-theme="light"] .code-content { background: #f8f8f8; color: #24292e; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hl-kw { color: #569cd6; }
+  .hljs-string, .hljs-attr, .hl-str { color: #ce9178; }
+  .hljs-number, .hljs-literal, .hl-num { color: #b5cea8; }
+  .hljs-comment, .hljs-quote, .hl-cmt { color: #6a9955; font-style: italic; }
+  .hljs-function, .hljs-title, .hljs-name, .hl-fn { color: #dcdcaa; }
+  .hljs-tag, .hljs-selector-id, .hljs-selector-class, .hl-tag { color: #4ec9b0; }
+  .hljs-attribute, .hljs-variable, .hljs-params { color: #9cdcfe; }
+  .hljs-type, .hljs-class .hljs-title { color: #4ec9b0; }
+  .hljs-meta, .hljs-doctag { color: #c586c0; }
+  .hljs-operator, .hljs-symbol { color: #d4d4d4; }
+  .hljs-regexp { color: #d16969; }
+  :root[data-theme="light"] .hljs-keyword { color: #0000ff; }
+  :root[data-theme="light"] .hljs-string { color: #a31515; }
+  :root[data-theme="light"] .hljs-comment { color: #008000; }
+  :root[data-theme="light"] .hljs-number { color: #098658; }
+  :root[data-theme="light"] .hljs-function, :root[data-theme="light"] .hljs-title { color: #795e26; }
+  :root[data-theme="light"] .hljs-tag { color: #800000; }
+  :root[data-theme="light"] .hljs-attribute { color: #ff0000; }
+
+  /* details 명세서 블록 */
+  details.spec-details, .assistant-content details {
+    border: 1px solid var(--border-color, #333);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin: 8px 0;
+    background: var(--bg2, rgba(255,255,255,0.03));
+  }
+  .assistant-content details > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 4px 0;
+    list-style: none;
+  }
+  .assistant-content details > summary::before {
+    content: "▶ ";
+    display: inline-block;
+    transition: transform 0.15s ease;
+  }
+  .assistant-content details[open] > summary::before { content: "▼ "; }
 </style>
+<!-- highlight.js (VSCode-like syntax coloring). CDN; 오프라인이면 폴백 하이라이터가 동작합니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/vs2015.min.css">
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 </head>
 <body>
 
@@ -670,6 +1006,12 @@
       <span class="logo-text">Vibe Coding</span>
     </div>
     <div class="sidebar-actions">
+      <button class="icon-btn" id="settings-btn" title="설정">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
       <button class="icon-btn" id="logout-btn" title="로그아웃">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
@@ -690,6 +1032,13 @@
       </svg>
       <input id="search-input" type="text" placeholder="채팅 검색...">
     </div>
+    <button class="sidebar-search-mini" id="sidebar-search-mini"
+            title="채팅 검색" aria-label="채팅 검색"
+            onclick="(function(){ const s=document.getElementById('sidebar'); s&&s.classList.remove('collapsed'); const i=document.getElementById('search-input'); i&&i.focus(); })()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+    </button>
   </div>
 
   <div class="sidebar-nav">
@@ -757,11 +1106,10 @@
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
             </svg>
           </button>
-          <button class="action-btn" id="mic-btn" title="음성 입력">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          </button>
+          <select id="run-mode-select" class="run-mode-select" title="실행 모드">
+            <option value="confirm">확인 후 진행</option>
+            <option value="auto">바로 진행</option>
+          </select>
         </div>
         <button id="send-btn" title="전송 (Enter)" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21L23 12 2 3v7l15 2-15 2v7z"/></svg>
@@ -799,51 +1147,25 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
-    <div class="settings-tabs">
-      <button class="settings-tab active" data-section="general" onclick="switchSettingsTab('general')">일반</button>
-      <button class="settings-tab" data-section="data" onclick="switchSettingsTab('data')">데이터</button>
-    </div>
     <div class="modal-body">
       <div class="settings-section active" id="section-general">
         <div class="setting-row">
           <div>
             <div class="setting-label">테마</div>
-            <div class="setting-desc">다크 / 라이트 모드 전환</div>
+            <div class="setting-desc">다크 / 라이트 / 기기 설정에 따름</div>
           </div>
           <select class="select-input" id="theme-select">
             <option value="dark">다크</option>
             <option value="light">라이트</option>
+            <option value="system">시스템 설정</option>
           </select>
         </div>
-        <div class="setting-row">
-          <div>
-            <div class="setting-label">글자 크기</div>
-            <div class="setting-desc">메시지 본문 크기</div>
-          </div>
-          <select class="select-input" id="fontsize-select">
-            <option value="13">작게</option>
-            <option value="14" selected>보통</option>
-            <option value="16">크게</option>
-            <option value="18">아주 크게</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="settings-section" id="section-data">
         <div class="setting-row">
           <div>
             <div class="setting-label">대화 내보내기</div>
-            <div class="setting-desc">모든 채팅을 JSON으로 다운로드</div>
+            <div class="setting-desc">모든 채팅을 JSON 파일로 다운로드</div>
           </div>
           <button class="modal-btn" onclick="exportAllChats()">내보내기</button>
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="setting-label">대화 가져오기</div>
-            <div class="setting-desc">JSON 파일에서 복원</div>
-          </div>
-          <button class="modal-btn" onclick="document.getElementById('import-input').click()">가져오기</button>
-          <input type="file" class="hidden-file-input" id="import-input" accept=".json">
         </div>
       </div>
     </div>
@@ -900,11 +1222,12 @@ const STATE = {
   currentChatId: null,
   notes: '',
   settings: {
-    theme: 'dark',
+    theme: 'system',
     fontSize: 14,
     temperature: 0.7,
     autoplay: false,
     ttsVoice: '',
+    runMode: 'confirm',
   },
 };
 
@@ -912,7 +1235,6 @@ let attachments = [];
 let currentPreviewCode = '';
 let isGenerating = false;
 let currentSpeech = null;
-let recognizer = null;
 
 const $ = id => document.getElementById(id);
 const sidebar = $('sidebar');
@@ -934,11 +1256,12 @@ function _stateKey() {
 
 function defaultSettings() {
   return {
-    theme: 'dark',
+    theme: 'system',
     fontSize: 14,
     temperature: 0.7,
     autoplay: false,
     ttsVoice: '',
+    runMode: 'confirm',
   };
 }
 
@@ -1008,6 +1331,18 @@ function buildMessage(role, content, extra = {}) {
       : new Date(timestamp).toISOString(),
     durationMs: Number.isFinite(extra.durationMs) ? extra.durationMs : null,
   };
+}
+
+function buildApiMessages(chat) {
+  if (!chat || !Array.isArray(chat.messages)) return [];
+  return chat.messages
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+    .filter(m => typeof m.content === 'string' && m.content.trim())
+    .slice(-20)
+    .map(m => ({
+      role: m.role,
+      content: m.content.trim(),
+    }));
 }
 
 function resetState() {
@@ -1379,6 +1714,12 @@ function parseMarkdown(text) {
   });
   // Escape
   let html = escapeHtml(text);
+  // Allow a small whitelist of HTML through (for <details> spec preview)
+  html = html
+    .replace(/&lt;details&gt;/g, '<details>')
+    .replace(/&lt;\/details&gt;/g, '</details>')
+    .replace(/&lt;summary&gt;/g, '<summary>')
+    .replace(/&lt;\/summary&gt;/g, '</summary>');
   // Headings
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
@@ -1403,7 +1744,8 @@ function parseMarkdown(text) {
   html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
   // Paragraphs (split on double newline)
   html = html.split(/\n\n+/).map(p => {
-    if (p.match(/^<(h[123]|ul|ol|blockquote|pre)/)) return p;
+    if (p.match(/^<(h[123]|ul|ol|blockquote|pre|details|\/details|summary|\/summary)/)) return p;
+    if (p.includes('</details>') || p.includes('<details>') || p.includes('<summary>')) return p;
     if (p.includes('\u0000CODE_')) return p;
     return p.trim() ? `<p>${p.replace(/\n/g, '<br>')}</p>` : '';
   }).join('');
@@ -1416,7 +1758,7 @@ function parseMarkdown(text) {
  * Code block
  * ════════════════════════════════════════════ */
 function createCodeBlock(code, lang) {
-  const isPreviewable = ['html'].includes(lang.toLowerCase());
+  const isPreviewable = ['html', 'jsx', 'tsx', 'javascript', 'dart'].includes(lang.toLowerCase());
   const div = document.createElement('div');
   div.className = 'code-block';
   div.dataset.code = code;
@@ -1436,7 +1778,7 @@ function createCodeBlock(code, lang) {
       </div>
     </div>
     <div class="code-content">${highlightCode(code, lang)}</div>`;
-  if (isPreviewable) div.querySelector('.preview-btn').onclick = () => openPreview(code);
+  if (isPreviewable) div.querySelector('.preview-btn').onclick = () => openPreview(code, lang);
   div.querySelector('.copy-code-btn').onclick = (e) => {
     copyText(code);
     const b = e.currentTarget;
@@ -1448,8 +1790,34 @@ function createCodeBlock(code, lang) {
 }
 
 function highlightCode(code, lang) {
+  // 파일경로 형태가 들어오면 확장자로 언어를 추정
+  let l = (lang || '').toLowerCase();
+  if (l.includes('.')) {
+    const ext = l.split('.').pop();
+    const map = { html: 'html', htm: 'html', css: 'css', js: 'javascript', mjs: 'javascript',
+      jsx: 'jsx', ts: 'typescript', tsx: 'tsx', py: 'python', json: 'json', md: 'markdown',
+      sh: 'bash', yml: 'yaml', yaml: 'yaml', sql: 'sql', rs: 'rust', go: 'go', java: 'java',
+      dart: 'dart', xml: 'xml', toml: 'ini' };
+    l = map[ext] || ext;
+  }
+  // 1순위: highlight.js (VSCode Dark+ 스타일 vs2015)
+  if (window.hljs) {
+    try {
+      const langAlias = { js: 'javascript', py: 'python', htm: 'html', yml: 'yaml',
+                          jsx: 'javascript', tsx: 'typescript' };
+      const useLang = langAlias[l] || l;
+      if (useLang && window.hljs.getLanguage(useLang)) {
+        return '<pre><code class="hljs language-' + useLang + '">' +
+               window.hljs.highlight(code, { language: useLang, ignoreIllegals: true }).value +
+               '</code></pre>';
+      }
+      // 언어 미상 → auto-detect
+      return '<pre><code class="hljs">' +
+             window.hljs.highlightAuto(code).value + '</code></pre>';
+    } catch (_) { /* 폴백으로 떨어짐 */ }
+  }
+  // 폴백: 기존의 간단 정규식 하이라이터
   let s = escapeHtml(code);
-  const l = lang.toLowerCase();
   if (l === 'html') {
     s = s.replace(/(&lt;\/?)([\w-]+)/g, '$1<b class="hl-tag">$2</b>')
       .replace(/([\w-]+)=/g, '<b class="hl-attr">$1</b>=')
@@ -1458,20 +1826,23 @@ function highlightCode(code, lang) {
     s = s.replace(/(\/\*[\s\S]*?\*\/)/g, '<b class="hl-cmt">$1</b>')
       .replace(/([.#]?[\w-]+)\s*\{/g, '<b class="hl-fn">$1</b> {')
       .replace(/([\w-]+):/g, '<b class="hl-attr">$1</b>:');
-  } else if (['js', 'javascript', 'python', 'py'].includes(l)) {
+  } else if (['js', 'javascript', 'python', 'py', 'typescript', 'ts'].includes(l)) {
     s = s.replace(/(\/\/[^\n]*|#[^\n]*)/g, '<b class="hl-cmt">$1</b>')
-      .replace(/\b(const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|def|print|in|not|and|or|True|False|None)\b/g, '<b class="hl-kw">$1</b>')
+      .replace(/\b(const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|def|print|in|not|and|or|True|False|None|interface|type|enum)\b/g, '<b class="hl-kw">$1</b>')
       .replace(/(&quot;[^&]*&quot;|&#x27;[^&]*&#x27;|`[^`]*`)/g, '<b class="hl-str">$1</b>')
       .replace(/\b(\d+)\b/g, '<b class="hl-num">$1</b>');
   }
-  return s;
+  return '<pre>' + s + '</pre>';
 }
 
 /* ════════════════════════════════════════════
  * Preview panel
  * ════════════════════════════════════════════ */
-function openPreview(code) {
+let currentPreviewLang = 'html';
+
+function openPreview(code, lang = 'html') {
   currentPreviewCode = code;
+  currentPreviewLang = (lang || 'html').toLowerCase();
   previewPanel.classList.add('open');
   switchPreviewTab('preview');
 }
@@ -1481,12 +1852,123 @@ function closePreview() {
   $('preview-frame').srcdoc = '';
 }
 
+// 언어별 미리보기 srcdoc 빌더
+function buildPreviewSrcdoc(code, lang) {
+  const l = (lang || 'html').toLowerCase();
+  if (l === 'html') return code;
+
+  // Node.js / 서버 사이드 JS 감지 → 브라우저에서 실행 불가하므로 안내 화면
+  const isNodeCode = l === 'javascript' && /(^|\n)\s*(const|let|var)\s+\w+\s*=\s*require\s*\(|module\.exports|process\.(env|argv)|app\.listen\s*\(|require\s*\(\s*['"]express['"]\s*\)/.test(code);
+  if (isNodeCode) {
+    const safeCode = (code || '').slice(0, 2000)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>Node.js Preview</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:linear-gradient(135deg,#1e1e2e 0%,#2d3748 100%); color:#e2e2f0; padding:24px; }
+  .card { max-width:480px; text-align:center; }
+  .icon { font-size:56px; margin-bottom:14px; }
+  .title { font-size:20px; font-weight:700; margin-bottom:10px; }
+  .desc { font-size:13px; color:#a0a0c0; line-height:1.7; margin-bottom:16px; }
+  pre { text-align:left; background:rgba(0,0,0,0.35); padding:12px; border-radius:8px;
+    font-size:11px; color:#c8c8e0; max-height:220px; overflow:auto;
+    font-family:ui-monospace,Menlo,Consolas,monospace; }
+</style></head><body><div class="card">
+  <div class="icon">🖥️</div>
+  <div class="title">Node.js 서버 코드</div>
+  <div class="desc">서버 사이드(Node.js) 코드는 브라우저에서 직접 실행할 수 없습니다.<br>
+  터미널에서 <code>node &lt;파일명&gt;</code> 으로 실행해 주세요.</div>
+  <pre>${safeCode}${(code || '').length > 2000 ? '\n... (생략)' : ''}</pre>
+</div></body></html>`;
+  }
+
+  if (l === 'jsx' || l === 'tsx' || l === 'javascript') {
+    // React + Babel 런타임으로 JSX를 브라우저에서 즉시 실행.
+    // import 문은 제거하고, 최상위 컴포넌트명으로 App/Main/Root 중 첫 번째를 mount.
+    const sanitized = code
+      .replace(/^\s*import\s.+?;?\s*$/gm, '')
+      .replace(/^\s*export\s+default\s+/gm, '')
+      .replace(/^\s*export\s+/gm, '');
+    return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>React Preview</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:16px;background:#fff;color:#111;}</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+try {
+${sanitized}
+
+  const rootEl = document.getElementById('root');
+  const Root = (typeof App !== 'undefined' && App)
+            || (typeof Main !== 'undefined' && Main)
+            || (typeof Root !== 'undefined' && Root);
+  if (!Root) {
+    rootEl.innerHTML = '<div style="color:#c00;font-family:monospace">App / Main / Root 컴포넌트를 찾을 수 없습니다.</div>';
+  } else {
+    ReactDOM.createRoot(rootEl).render(React.createElement(Root));
+  }
+} catch (e) {
+  document.getElementById('root').innerHTML =
+    '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace">런타임 오류: ' + (e && e.message ? e.message : e) + '</pre>';
+}
+<\/script>
+</body>
+</html>`;
+  }
+
+  if (l === 'dart') {
+    // Flutter/Dart는 브라우저에서 직접 실행 불가 → 안내 화면
+    const safeCode = (code || '').slice(0, 2000)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>Flutter Preview</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%); color:#e2e2f0; padding:24px; }
+  .card { max-width:460px; text-align:center; }
+  .icon { font-size:56px; margin-bottom:14px; }
+  .title { font-size:20px; font-weight:700; margin-bottom:10px; }
+  .desc { font-size:13px; color:#a0a0c0; line-height:1.7; margin-bottom:16px; }
+  .desc a { color:#4f8cff; text-decoration:none; font-weight:600; }
+  .desc a:hover { text-decoration:underline; }
+  pre { text-align:left; background:rgba(0,0,0,0.35); padding:12px; border-radius:8px;
+    font-size:11px; color:#c8c8e0; max-height:200px; overflow:auto;
+    font-family:ui-monospace,Menlo,Consolas,monospace; }
+</style></head>
+<body>
+  <div class="card">
+    <div class="icon">📱</div>
+    <div class="title">Flutter 코드 미리보기 불가</div>
+    <div class="desc">
+      Flutter(Dart) 코드는 브라우저에서 직접 실행할 수 없습니다.<br>
+      <a href="https://dartpad.dev" target="_blank" rel="noopener">DartPad</a> 또는
+      로컬 Flutter 환경(<code>flutter run</code>)에서 실행해 주세요.
+    </div>
+    <pre>${safeCode}${(code || '').length > 2000 ? '\n... (생략)' : ''}</pre>
+  </div>
+</body>
+</html>`;
+  }
+
+  return code;
+}
+
 function switchPreviewTab(tab) {
   document.querySelectorAll('.preview-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   if (tab === 'preview') {
     $('preview-frame').style.display = 'block';
     $('preview-code-view').style.display = 'none';
-    $('preview-frame').srcdoc = currentPreviewCode;
+    $('preview-frame').srcdoc = buildPreviewSrcdoc(currentPreviewCode, currentPreviewLang);
   } else {
     $('preview-frame').style.display = 'none';
     $('preview-code-view').style.display = 'block';
@@ -1529,6 +2011,285 @@ function sendMessage() {
   generateResponse();
 }
 
+/* ════════════════════════════════════════════
+ * Loading bubble helpers
+ * ════════════════════════════════════════════ */
+function createLoadingBubble(_labelText) {
+  const div = document.createElement('div');
+  div.className = 'message assistant';
+  div.innerHTML =
+    '<div class="assistant-content assistant-loading">' +
+      '<span class="assistant-loading-text">' +
+        '잘 생각하기' +
+        '<span class="assistant-loading-dots"><span>.</span><span>.</span><span>.</span></span>' +
+      '</span>' +
+    '</div>';
+  return div;
+}
+
+// 타이머/문구 순환 제거 — 인터벌 핸들 호환용 no-op
+function startLoadingTimer(_loadingDiv, _startedAt) {
+  return 0;
+}
+
+/* ── 스트리밍 버블: 청크가 도착할 때마다 점진적으로 렌더링 ── */
+function createStreamingBubble() {
+  const div = document.createElement('div');
+  div.className = 'message assistant streaming';
+  const content = document.createElement('div');
+  content.className = 'assistant-content';
+  div.appendChild(content);
+  return { div, content };
+}
+
+function updateStreamingContent(contentEl, text) {
+  // 미완성 코드펜스가 있으면 임시로 닫아서 렌더가 깨지지 않도록 한다
+  const fenceCount = (text.match(/```/g) || []).length;
+  const safeText = fenceCount % 2 === 1 ? text + '\n```' : text;
+  const parsed = parseMarkdown(safeText);
+  contentEl.innerHTML = parsed.html;
+  parsed.codeBlocks.forEach((cb, i) => {
+    const marker = contentEl.querySelector(`[data-code-marker="${i}"]`);
+    const block = createCodeBlock(cb.code, cb.lang);
+    if (marker) marker.replaceWith(block);
+    else contentEl.appendChild(block);
+  });
+}
+
+/* ════════════════════════════════════════════
+ * Spec confirmation UI (확인 후 진행 모드)
+ * — 문서 스타일 편집 카드
+ * ════════════════════════════════════════════ */
+function askSpecConfirmation(spec) {
+  return new Promise((resolve) => {
+    const card = document.createElement('div');
+    card.className = 'message assistant';
+    card.appendChild(buildSpecDoc(spec, {
+      onCancel: () => { card.remove(); resolve(null); },
+      onApprove: (updated) => { card.remove(); resolve(updated); },
+    }));
+    messagesEl.appendChild(card);
+    scrollToBottom();
+  });
+}
+
+function buildSpecDoc(spec, { onCancel, onApprove }) {
+  // 안전 기본값
+  const project = spec.project || {};
+  const files = Array.isArray(spec.files) ? spec.files : [];
+  const components = Array.isArray(spec.components) ? spec.components : [];
+  const apiList = Array.isArray(spec.api) ? spec.api : [];
+  const constraints = Array.isArray(spec.constraints) ? spec.constraints : [];
+  const userStory = typeof spec.user_story === 'string' ? spec.user_story : '';
+
+  const doc = document.createElement('div');
+  doc.className = 'assistant-content';
+  doc.innerHTML = `
+    <div class="spec-doc">
+      <div class="spec-doc-header">
+        <div class="spec-doc-title">📋 명세서 검토</div>
+        <div class="spec-doc-subtitle">필요한 부분을 직접 수정한 뒤 확정해 주세요. 항목 위에 마우스를 올리면 × 삭제 버튼이 나타납니다.</div>
+      </div>
+
+      <section class="spec-section">
+        <h4>프로젝트</h4>
+        <div class="spec-field">
+          <span class="spec-field-label">이름</span>
+          <div class="spec-field-value"><input class="spec-input" data-path="project.name"></div>
+        </div>
+        <div class="spec-field">
+          <span class="spec-field-label">타입</span>
+          <div class="spec-field-value"><input class="spec-input" data-path="project.type"></div>
+        </div>
+        <div class="spec-field">
+          <span class="spec-field-label">범위</span>
+          <div class="spec-field-value"><input class="spec-input" data-path="project.scope"></div>
+        </div>
+        <div class="spec-field">
+          <span class="spec-field-label">기술 스택</span>
+          <div class="spec-field-value"><input class="spec-input" data-path="project.tech_stack" data-array="true" placeholder="쉼표로 구분"></div>
+        </div>
+        <div class="spec-field">
+          <span class="spec-field-label">설명</span>
+          <div class="spec-field-value"><textarea class="spec-textarea" rows="2" data-path="project.description"></textarea></div>
+        </div>
+      </section>
+
+      <section class="spec-section">
+        <h4>파일</h4>
+        <ul class="spec-list" data-list="files"></ul>
+        <button class="spec-add-btn" data-add="files">＋ 파일 추가</button>
+      </section>
+
+      <section class="spec-section" data-section="components">
+        <h4>컴포넌트</h4>
+        <div class="spec-components-body"></div>
+      </section>
+
+      <section class="spec-section" data-section="api">
+        <h4>API</h4>
+        <div class="spec-api-body"></div>
+      </section>
+
+      <section class="spec-section">
+        <h4>제약 사항</h4>
+        <ul class="spec-list" data-list="constraints"></ul>
+        <button class="spec-add-btn" data-add="constraints">＋ 제약 추가</button>
+      </section>
+
+      <section class="spec-section">
+        <h4>사용자 스토리</h4>
+        <textarea class="spec-textarea" rows="2" data-path="user_story"></textarea>
+      </section>
+
+      <div class="spec-doc-actions">
+        <button class="spec-cancel-btn">취소</button>
+        <button class="primary spec-approve-btn">확정하고 코드 생성</button>
+      </div>
+    </div>
+  `;
+
+  // ── 값 채우기 ─────────────────────────────────────────────
+  const setFieldValue = (path, value) => {
+    const el = doc.querySelector(`[data-path="${path}"]`);
+    if (!el) return;
+    if (el.dataset.array === 'true') {
+      el.value = Array.isArray(value) ? value.join(', ') : (value || '');
+    } else {
+      el.value = value == null ? '' : String(value);
+    }
+  };
+  setFieldValue('project.name', project.name);
+  setFieldValue('project.type', project.type);
+  setFieldValue('project.scope', project.scope);
+  setFieldValue('project.tech_stack', project.tech_stack);
+  setFieldValue('project.description', project.description);
+  setFieldValue('user_story', userStory);
+
+  // 파일 리스트
+  const filesUl = doc.querySelector('[data-list="files"]');
+  const addFileRow = (file = { path: '', role: '' }) => {
+    const li = document.createElement('li');
+    li.className = 'spec-list-item';
+    li.innerHTML = `
+      <input class="spec-input spec-item-path" placeholder="파일 경로">
+      <span class="spec-item-sep">—</span>
+      <input class="spec-input spec-item-role" placeholder="역할 설명">
+      <button class="spec-remove-btn" title="삭제">×</button>
+    `;
+    li.querySelector('.spec-item-path').value = file.path || '';
+    li.querySelector('.spec-item-role').value = file.role || '';
+    li.querySelector('.spec-remove-btn').onclick = () => li.remove();
+    filesUl.appendChild(li);
+  };
+  files.forEach(addFileRow);
+  doc.querySelector('[data-add="files"]').onclick = () => addFileRow();
+
+  // 제약사항 리스트
+  const constraintsUl = doc.querySelector('[data-list="constraints"]');
+  const addConstraintRow = (text = '') => {
+    const li = document.createElement('li');
+    li.className = 'spec-list-item';
+    li.innerHTML = `
+      <input class="spec-input" style="flex:1" placeholder="제약 조건">
+      <button class="spec-remove-btn" title="삭제">×</button>
+    `;
+    li.querySelector('input').value = text;
+    li.querySelector('.spec-remove-btn').onclick = () => li.remove();
+    constraintsUl.appendChild(li);
+  };
+  constraints.forEach(addConstraintRow);
+  doc.querySelector('[data-add="constraints"]').onclick = () => addConstraintRow();
+
+  // 컴포넌트 (readonly 문서 표시)
+  const compBody = doc.querySelector('.spec-components-body');
+  if (components.length === 0) {
+    compBody.innerHTML = '<div class="spec-readonly-item" style="color:var(--text3)">없음</div>';
+  } else {
+    components.forEach(c => {
+      const item = document.createElement('div');
+      item.className = 'spec-readonly-item';
+      const props = Array.isArray(c.props) ? c.props.join(', ') : (c.props || '');
+      item.innerHTML = `
+        <div class="spec-readonly-name">${escapeHtml(c.name || '(이름 없음)')}</div>
+        ${props ? `<div class="spec-readonly-meta">props: ${escapeHtml(props)}</div>` : ''}
+        ${c.behavior ? `<div class="spec-readonly-meta">${escapeHtml(c.behavior)}</div>` : ''}
+      `;
+      compBody.appendChild(item);
+    });
+  }
+
+  // API (readonly 문서 표시)
+  const apiBody = doc.querySelector('.spec-api-body');
+  if (apiList.length === 0) {
+    apiBody.innerHTML = '<div class="spec-readonly-item" style="color:var(--text3)">없음</div>';
+  } else {
+    apiList.forEach(a => {
+      const item = document.createElement('div');
+      item.className = 'spec-readonly-item';
+      item.innerHTML = `<div class="spec-readonly-meta">${escapeHtml(JSON.stringify(a))}</div>`;
+      apiBody.appendChild(item);
+    });
+  }
+
+  // ── 버튼 바인딩 ──────────────────────────────────────────
+  doc.querySelector('.spec-cancel-btn').onclick = () => onCancel();
+  doc.querySelector('.spec-approve-btn').onclick = () => {
+    try {
+      onApprove(readSpecDoc(doc, spec));
+    } catch (e) {
+      toast('명세 저장 실패: ' + e.message, 'error');
+    }
+  };
+
+  return doc;
+}
+
+function readSpecDoc(doc, originalSpec) {
+  // 원본을 깊은 복사한 뒤 편집 가능 필드만 덮어씁니다.
+  const result = JSON.parse(JSON.stringify(originalSpec || {}));
+  result.project = result.project || {};
+
+  doc.querySelectorAll('[data-path]').forEach(el => {
+    const path = el.dataset.path;
+    const parts = path.split('.');
+    let value;
+    if (el.dataset.array === 'true') {
+      value = (el.value || '').split(',').map(s => s.trim()).filter(Boolean);
+    } else {
+      value = el.value;
+    }
+    if (parts.length === 1) {
+      result[parts[0]] = value;
+    } else {
+      result[parts[0]] = result[parts[0]] || {};
+      result[parts[0]][parts[1]] = value;
+    }
+  });
+
+  // 파일 리스트
+  const filesUl = doc.querySelector('[data-list="files"]');
+  if (filesUl) {
+    result.files = Array.from(filesUl.querySelectorAll('.spec-list-item')).map(li => ({
+      path: li.querySelector('.spec-item-path').value.trim(),
+      role: li.querySelector('.spec-item-role').value.trim(),
+    })).filter(f => f.path);
+  }
+
+  // 제약 리스트
+  const constraintsUl = doc.querySelector('[data-list="constraints"]');
+  if (constraintsUl) {
+    result.constraints = Array.from(constraintsUl.querySelectorAll('.spec-list-item input'))
+      .map(i => i.value.trim()).filter(Boolean);
+  }
+
+  // 필수 필드 보강 (백엔드 _validate_spec 통과)
+  result.components = result.components || [];
+  result.api = result.api || [];
+  result.user_story = result.user_story || '';
+  return result;
+}
+
 async function generateResponse() {
   const chat = getCurrentChat();
   if (!chat) return;
@@ -1538,42 +2299,152 @@ async function generateResponse() {
   const lastUser = [...chat.messages].reverse().find(m => m.role === 'user');
   const userText = lastUser ? lastUser.content : '';
   if (lastUser && !lastUser.requestId) lastUser.requestId = uid();
+  const contextMessages = buildApiMessages(chat);
 
-  // 로딩 표시
-  const loadingDiv = document.createElement('div');
-  loadingDiv.className = 'message assistant';
-  loadingDiv.innerHTML = '<div class="assistant-content assistant-loading">응답을 생성하고 있습니다...</div>';
+  // 로딩 표시 (우측 끝에 실시간 경과 시간 + 파도타기 점)
+  const loadingDiv = createLoadingBubble('응답을 생성하고 있습니다');
   messagesEl.appendChild(loadingDiv);
   scrollToBottom();
 
   let fullContent = '';
   const responseStartedAt = Date.now();
+  const loadingTimerId = startLoadingTimer(loadingDiv, responseStartedAt);
+
+  // 실행 모드: 'confirm' → 1차 명세 → 사용자 확인 → 코드 스트림
+  //             'auto'    → 기존 통합 /api/chat 엔드포인트로 바로 진행
+  const runMode = ($('run-mode-select') && $('run-mode-select').value) || 'confirm';
+
   try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders(),
-      },
-      body: JSON.stringify({ message: userText }),
-    });
+    if (runMode === 'confirm') {
+      // ── 1단계: 분류 + (코딩이면) 명세 생성, (일반 질문이면) 바로 응답 ──
+      const specRes = await fetch('/api/chat/spec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          message: userText,
+          chat_id: chat?.id || null,
+          messages: contextMessages,
+        }),
+      });
+      if (specRes.status === 401) { logout(); throw new Error('unauthorized'); }
+      if (!specRes.ok) {
+        const errText = await specRes.text().catch(() => '');
+        throw new Error(`요청 처리 실패 (${specRes.status}): ${errText}`);
+      }
+      const specData = await specRes.json();
 
-    if (res.status === 401) {
-      fullContent = '세션이 만료되었습니다. 다시 로그인해 주세요.';
-      logout();
-      throw new Error('unauthorized');
-    }
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`서버 오류 (${res.status}): ${errText}`);
-    }
+      // 일반 질문: 명세/확인 단계 건너뛰고 바로 응답 표시
+      if (specData.mode === 'chat') {
+        fullContent = specData.reply || '';
+        // 공통 처리(로딩 제거, 메시지 추가)로 폴백
+      } else {
+        // 로딩 정리 및 사용자 확인 UI 삽입
+        clearInterval(loadingTimerId);
+        loadingDiv.remove();
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      fullContent += decoder.decode(value, { stream: true });
+        const approved = await askSpecConfirmation(specData.spec);
+      if (!approved) {
+        // 사용자 취소 → 취소 메시지만 남기고 종료
+        const cancelMsg = buildMessage('assistant', '🛑 사용자가 명세 확인 단계에서 취소했습니다.', {
+          requestId: lastUser ? lastUser.requestId : uid(),
+          timestamp: Date.now(),
+          durationMs: Date.now() - responseStartedAt,
+        });
+        chat.messages.push(cancelMsg);
+        renderMessages();
+        scrollToBottom();
+        chat.updatedAt = Date.now();
+        saveState();
+        isGenerating = false;
+        updateSendBtn();
+        return;
+      }
+
+      // ── 2단계: 코드 생성 스트림 ────────────────────────
+      const loadingDiv2 = createLoadingBubble('코드 생성 중');
+      messagesEl.appendChild(loadingDiv2);
+      scrollToBottom();
+      const codeStartedAt = Date.now();
+      const codeTimerId = startLoadingTimer(loadingDiv2, codeStartedAt);
+
+      let streamBubble2 = null;
+      try {
+        const codeRes = await fetch('/api/chat/code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            message: userText,
+            chat_id: chat?.id || null,
+            spec: approved,
+            messages: contextMessages,
+          }),
+        });
+        if (codeRes.status === 401) { logout(); throw new Error('unauthorized'); }
+        if (!codeRes.ok) {
+          const errText = await codeRes.text().catch(() => '');
+          throw new Error(`코드 생성 실패 (${codeRes.status}): ${errText}`);
+        }
+        const reader = codeRes.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          fullContent += decoder.decode(value, { stream: true });
+          if (!streamBubble2) {
+            loadingDiv2.remove();
+            streamBubble2 = createStreamingBubble();
+            messagesEl.appendChild(streamBubble2.div);
+          }
+          updateStreamingContent(streamBubble2.content, fullContent);
+          scrollToBottom();
+        }
+      } finally {
+        clearInterval(codeTimerId);
+        if (loadingDiv2.parentNode) loadingDiv2.remove();
+        if (streamBubble2 && streamBubble2.div.parentNode) streamBubble2.div.remove();
+      }
+
+      // 명세서 미리보기를 답변 맨 앞에 붙여서 기록
+      const specHeader =
+        '<details><summary>📋 확정된 명세서 (클릭하여 펼치기)</summary>\n\n' +
+        '```json\n' + JSON.stringify(approved, null, 2) + '\n```\n\n</details>\n\n';
+      fullContent = specHeader + fullContent;
+      }
+    } else {
+      // ── 자동 모드: 기존 통합 엔드포인트 ──────────────────
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          message: userText,
+          chat_id: chat?.id || null,
+          messages: contextMessages,
+        }),
+      });
+      if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`서버 오류 (${res.status}): ${errText}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let streamBubble = null;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          fullContent += decoder.decode(value, { stream: true });
+          if (!streamBubble) {
+            if (loadingDiv.parentNode) loadingDiv.remove();
+            streamBubble = createStreamingBubble();
+            messagesEl.appendChild(streamBubble.div);
+          }
+          updateStreamingContent(streamBubble.content, fullContent);
+          scrollToBottom();
+        }
+      } finally {
+        if (streamBubble && streamBubble.div.parentNode) streamBubble.div.remove();
+      }
     }
   } catch (err) {
     if (err.message !== 'unauthorized') {
@@ -1581,8 +2452,9 @@ async function generateResponse() {
     }
   }
 
-  // 로딩 제거 후 완성된 메시지를 한번에 표시
-  loadingDiv.remove();
+  // 로딩 제거 후 완성된 메시지를 한번에 표시 (confirm 모드는 이미 정리된 상태)
+  clearInterval(loadingTimerId);
+  if (loadingDiv.parentNode) loadingDiv.remove();
   const finishedAt = Date.now();
   const assistantMsg = buildMessage('assistant', fullContent, {
     requestId: lastUser ? lastUser.requestId : uid(),
@@ -1625,24 +2497,6 @@ function speak(text, btn) {
   speechSynthesis.speak(utter);
 }
 
-function startVoiceInput() {
-  if (recognizer) { recognizer.stop(); return; }
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { toast('음성 인식이 지원되지 않습니다', 'error'); return; }
-  recognizer = new SR();
-  recognizer.lang = 'ko-KR';
-  recognizer.continuous = false;
-  recognizer.interimResults = true;
-  $('mic-btn').classList.add('recording');
-  recognizer.onresult = (e) => {
-    const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
-    chatInput.value = transcript;
-    chatInput.dispatchEvent(new Event('input'));
-  };
-  recognizer.onend = () => { $('mic-btn').classList.remove('recording'); recognizer = null; };
-  recognizer.onerror = () => { $('mic-btn').classList.remove('recording'); recognizer = null; };
-  recognizer.start();
-}
 
 /* ════════════════════════════════════════════
  * Attachments
@@ -1680,13 +2534,7 @@ function openModal(id) {
 function closeModal(id) { $(id).classList.remove('open'); }
 
 function populateSettings() {
-  $('theme-select').value = STATE.settings.theme;
-  $('fontsize-select').value = STATE.settings.fontSize;
-}
-
-function switchSettingsTab(tab) {
-  document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.section === tab));
-  document.querySelectorAll('.settings-section').forEach(s => s.classList.toggle('active', s.id === `section-${tab}`));
+  $('theme-select').value = STATE.settings.theme || 'system';
 }
 
 function populateModels() {
@@ -1726,8 +2574,23 @@ function saveNotes() {
 /* ════════════════════════════════════════════
  * Settings handlers
  * ════════════════════════════════════════════ */
+function resolveTheme(pref) {
+  if (pref === 'system') {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+      ? 'light'
+      : 'dark';
+  }
+  return pref === 'light' ? 'light' : 'dark';
+}
 function applyTheme() {
-  document.documentElement.classList.toggle('light', STATE.settings.theme === 'light');
+  const effective = resolveTheme(STATE.settings.theme);
+  document.documentElement.classList.toggle('light', effective === 'light');
+}
+// 시스템 설정 변경 시 자동 반영 ('system' 선택 시에만)
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (STATE.settings.theme === 'system') applyTheme();
+  });
 }
 function applyFontSize() {
   document.body.style.fontSize = STATE.settings.fontSize + 'px';
@@ -1873,7 +2736,12 @@ async function handleLogin(e) {
     hideLogin();
     resetState();
     loadState();
-    loadStateFromServer();
+    await loadStateFromServer();
+    // 로그인 직후에는 마지막 대화를 이어서 열지 않고 기본 화면(웰컴)으로 시작
+    STATE.currentChatId = null;
+    saveStateLocal();
+    renderChatList();
+    renderMessages();
   } catch (err) {
     errEl.textContent = err.message;
   } finally {
@@ -1931,6 +2799,7 @@ function init() {
   $('logout-btn').onclick = logout;
   if (isLoggedIn()) { hideLogin(); loadStateFromServer(); } else showLogin();
 
+  $('settings-btn').onclick = () => openModal('settings-modal');
   $('toggle-sidebar').onclick = () => sidebar.classList.toggle('collapsed');
   $('new-chat-btn').onclick = () => { createChat(); chatInput.focus(); };
   $('search-input').oninput = (e) => renderChatList(e.target.value);
@@ -1947,24 +2816,12 @@ function init() {
 
   $('attach-btn').onclick = () => $('file-input').click();
   $('file-input').onchange = (e) => handleFiles(e.target.files);
-  $('mic-btn').onclick = startVoiceInput;
+  // 실행 모드 선택 기억
+  if (STATE.settings.runMode) $('run-mode-select').value = STATE.settings.runMode;
+  $('run-mode-select').onchange = (e) => { STATE.settings.runMode = e.target.value; saveState(); };
 
   // Settings
   $('theme-select').onchange = (e) => { STATE.settings.theme = e.target.value; saveState(); applyTheme(); };
-  $('fontsize-select').onchange = (e) => { STATE.settings.fontSize = +e.target.value; saveState(); applyFontSize(); };
-
-  $('import-input').onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        if (data.chats) { STATE.chats = data.chats.concat(STATE.chats); saveState(); renderChatList(); toast('가져오기 완료'); }
-      } catch { toast('잘못된 파일 형식', 'error'); }
-    };
-    reader.readAsText(file);
-  };
 
   // Drag & drop files
   document.addEventListener('dragover', (e) => e.preventDefault());

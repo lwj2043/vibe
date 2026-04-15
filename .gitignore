@@ -9,8 +9,11 @@ pipelines/__init__/
 pipelines/dual_model_pipeline/
 pipelines/failed/
 user.json
+users.json
 chat_logs/*
 !chat_logs/.gitkeep
+specs/*
+!specs/.gitkeep
 server.err.log
 server.out.log
 server.log

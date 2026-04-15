@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sys
 from datetime import datetime
@@ -20,7 +21,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent
@@ -163,39 +164,28 @@ def register(payload: RegisterPayload) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Chat log persistence (per-user)
 # ---------------------------------------------------------------------------
-def _chat_log_path(username: str) -> Path:
+# 저장 구조:
+#   chat_logs/
+#     <username>/
+#       state.json   — 프런트 복원용(chats + settings, 기존 구조 유지)
+#       log.jsonl    — 턴 단위 감사 로그. 한 줄에 {date,time,input,response}
+def _user_log_dir(username: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", (username or "anonymous").strip()).strip("._") or "anonymous"
+    path = CHAT_LOGS_DIR / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _state_path(username: str) -> Path:
+    return _user_log_dir(username) / "state.json"
+
+
+def _jsonl_path(username: str) -> Path:
+    return _user_log_dir(username) / "log.jsonl"
+
+
+def _legacy_single_file_path(username: str) -> Path:
     return CHAT_LOGS_DIR / f"{username}.json"
-
-
-def _format_timestamp(timestamp_ms: Any) -> str | None:
-    if not isinstance(timestamp_ms, (int, float)):
-        return None
-    try:
-        return datetime.fromtimestamp(timestamp_ms / 1000).astimezone().isoformat(
-            timespec="seconds"
-        )
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def _format_elapsed(duration_ms: int | None) -> str | None:
-    if duration_ms is None or duration_ms < 0:
-        return None
-    if duration_ms < 1000:
-        return f"{duration_ms}ms"
-
-    seconds = duration_ms / 1000
-    if seconds < 60:
-        precision = 1 if seconds < 10 else 0
-        return f"{seconds:.{precision}f}초"
-
-    minutes = int(seconds // 60)
-    remaining_seconds = seconds - (minutes * 60)
-    if remaining_seconds < 1:
-        return f"{minutes}분"
-
-    precision = 1 if remaining_seconds < 10 else 0
-    return f"{minutes}분 {remaining_seconds:.{precision}f}초"
 
 
 def _message_text(message: dict[str, Any]) -> str:
@@ -203,82 +193,49 @@ def _message_text(message: dict[str, Any]) -> str:
     return content if isinstance(content, str) else str(content)
 
 
-def _attachment_names(message: dict[str, Any]) -> list[str]:
-    attachments = message.get("attachments")
-    if not isinstance(attachments, list):
-        return []
+def _split_date_time(timestamp_ms: Any) -> tuple[str, str]:
+    """ms 타임스탬프 → (date, time) 문자열. 실패 시 현재 시각 사용."""
+    try:
+        if isinstance(timestamp_ms, (int, float)):
+            dt = datetime.fromtimestamp(timestamp_ms / 1000).astimezone()
+        else:
+            dt = datetime.now().astimezone()
+    except (OverflowError, OSError, ValueError):
+        dt = datetime.now().astimezone()
+    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M:%S")
 
-    names: list[str] = []
-    for attachment in attachments:
-        if not isinstance(attachment, dict):
+
+def _build_simple_logs(chats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """모든 채팅의 (user → assistant) 턴을 단순 로그 엔트리로 변환.
+
+    각 엔트리는 {date, time, input, response} 형식만 가집니다.
+    (user 는 파일 경로로 식별되므로 본문에 넣지 않습니다.)
+    """
+    logs: list[dict[str, Any]] = []
+    for chat in chats:
+        if not isinstance(chat, dict):
             continue
-        name = attachment.get("name")
-        if isinstance(name, str) and name.strip():
-            names.append(name.strip())
-    return names
-
-
-def _build_turn_logs(chat: dict[str, Any]) -> list[dict[str, Any]]:
-    turns: list[dict[str, Any]] = []
-    pending_user: dict[str, Any] | None = None
-
-    for message in chat.get("messages", []):
-        if not isinstance(message, dict):
-            continue
-
-        role = message.get("role")
-        if role == "user":
-            pending_user = message
-            continue
-        if role != "assistant" or pending_user is None:
-            continue
-
-        user_timestamp = pending_user.get("timestamp")
-        assistant_timestamp = message.get("timestamp")
-        response_time_ms: int | None = None
-        if isinstance(message.get("durationMs"), (int, float)):
-            duration = int(message["durationMs"])
-            if duration >= 0:
-                response_time_ms = duration
-        elif isinstance(user_timestamp, (int, float)) and isinstance(
-            assistant_timestamp, (int, float)
-        ):
-            duration = int(assistant_timestamp - user_timestamp)
-            if duration >= 0:
-                response_time_ms = duration
-
-        attachment_names = _attachment_names(pending_user)
-        turns.append(
-            {
-                "turn_index": len(turns) + 1,
-                "request_id": message.get("requestId") or pending_user.get("requestId"),
-                "input_text": _message_text(pending_user),
-                "output_text": _message_text(message),
-                "model": chat.get("model"),
-                "elapsed": _format_elapsed(response_time_ms),
-                "attachment_count": len(attachment_names),
-                "attachment_names": attachment_names,
-            }
-        )
-        pending_user = None
-
-    return turns
-
-
-def _build_chat_summary(chat: dict[str, Any]) -> dict[str, Any]:
-    turns = _build_turn_logs(chat)
-    messages = chat.get("messages", [])
-    return {
-        "chat_id": chat.get("id"),
-        "title": chat.get("title"),
-        "model": chat.get("model"),
-        "pinned": bool(chat.get("pinned")),
-        "created_at": _format_timestamp(chat.get("createdAt")),
-        "updated_at": _format_timestamp(chat.get("updatedAt")),
-        "message_count": len(messages) if isinstance(messages, list) else 0,
-        "turn_count": len(turns),
-        "turns": turns,
-    }
+        pending_user: dict[str, Any] | None = None
+        for message in chat.get("messages", []) or []:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role == "user":
+                pending_user = message
+                continue
+            if role != "assistant" or pending_user is None:
+                continue
+            date_str, time_str = _split_date_time(message.get("timestamp"))
+            logs.append(
+                {
+                    "date": date_str,
+                    "time": time_str,
+                    "input": _message_text(pending_user),
+                    "response": _message_text(message),
+                }
+            )
+            pending_user = None
+    return logs
 
 
 def _sanitize_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -314,13 +271,29 @@ def _sanitize_chat(chat: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/chats")
 def get_chats(request: Request) -> dict:
     username = _require_session(request)
-    path = _chat_log_path(username)
-    if not path.exists():
-        return {"chats": [], "settings": None}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"chats": [], "settings": None}
+    state = _state_path(username)
+    # 새 포맷 우선
+    if state.exists():
+        try:
+            data = json.loads(state.read_text(encoding="utf-8"))
+            return {
+                "chats": data.get("chats", []),
+                "settings": data.get("settings"),
+            }
+        except (json.JSONDecodeError, OSError):
+            return {"chats": [], "settings": None}
+    # 구 포맷(단일 파일) 마이그레이션 — 읽기 전용 폴백
+    legacy = _legacy_single_file_path(username)
+    if legacy.exists():
+        try:
+            data = json.loads(legacy.read_text(encoding="utf-8"))
+            return {
+                "chats": data.get("chats", []),
+                "settings": data.get("settings"),
+            }
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"chats": [], "settings": None}
 
 
 class SaveChatsPayload(BaseModel):
@@ -332,42 +305,60 @@ class SaveChatsPayload(BaseModel):
 def save_chats(payload: SaveChatsPayload, request: Request) -> dict:
     username = _require_session(request)
     CHAT_LOGS_DIR.mkdir(exist_ok=True)
-    path = _chat_log_path(username)
+
     settings = _sanitize_settings(payload.settings)
     chats = [_sanitize_chat(chat) for chat in payload.chats if isinstance(chat, dict)]
-    chat_summaries = [
-        _build_chat_summary(chat) for chat in payload.chats if isinstance(chat, dict)
-    ]
-    path.write_text(
+
+    # 1) 복원용 상태 파일 — chat_logs/<user>/state.json
+    state_path = _state_path(username)
+    state_path.write_text(
         json.dumps(
-            {
-                "log_version": 3,
-                "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                "username": username,
-                "chats": chats,
-                "settings": settings,
-                "conversation_logs": chat_summaries,
-                "chat_summaries": chat_summaries,
-            },
+            {"chats": chats, "settings": settings},
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
+
+    # 2) 턴 단위 감사 로그 — chat_logs/<user>/log.jsonl
+    #    한 줄당 {"date","time","input","response"} 만 담음.
+    logs = _build_simple_logs(chats)
+    jsonl_path = _jsonl_path(username)
+    with jsonl_path.open("w", encoding="utf-8") as f:
+        for entry in logs:
+            f.write(json.dumps(entry, ensure_ascii=False))
+            f.write("\n")
+
+    # 3) 구 단일 파일은 더 이상 쓰지 않음 — 있으면 조용히 제거하여 혼란 방지
+    legacy = _legacy_single_file_path(username)
+    if legacy.exists():
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+
     return {"ok": True}
 
 
 class ChatPayload(BaseModel):
     message: str
+    chat_id: str | None = None
+    messages: list[dict[str, Any]] | None = None
 
 
 @app.post("/api/chat")
 def chat(payload: ChatPayload, request: Request) -> StreamingResponse:
-    _require_session(request)
+    """자동 모드: 명세 → 코드 전체 실행 (바로 진행)."""
+    username = _require_session(request)
 
     def stream():
         try:
-            for chunk in pipeline.pipe(user_message=payload.message):
+            for chunk in pipeline.pipe(
+                user_message=payload.message,
+                messages=payload.messages,
+                username=username,
+                chat_id=payload.chat_id,
+            ):
                 if chunk:
                     yield chunk
         except Exception as exc:  # noqa: BLE001
@@ -376,7 +367,156 @@ def chat(payload: ChatPayload, request: Request) -> StreamingResponse:
     return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
 
 
+@app.post("/api/chat/spec")
+def chat_generate_spec(payload: ChatPayload, request: Request) -> dict[str, Any]:
+    """'확인 후 진행' 모드 1단계.
+
+    코딩 요청이면 명세를 생성해 반환 (`{"mode": "spec", "spec": {...}}`).
+    일반 질문이면 채팅 응답을 바로 생성해 반환 (`{"mode": "chat", "reply": "..."}`).
+    """
+    username = _require_session(request)
+
+    # 코딩 요청 여부 판정 — 아니면 명세 단계를 건너뛰고 바로 채팅 응답
+    if not Pipeline._is_coding_request(payload.message):
+        reply_chunks: list[str] = []
+        try:
+            for chunk in pipeline.generate_chat_reply(
+                payload.message,
+                messages=payload.messages,
+            ):
+                if chunk:
+                    reply_chunks.append(chunk)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"mode": "chat", "reply": "".join(reply_chunks)}
+ 
+    try:
+        spec = pipeline.generate_spec(
+            user_message=payload.message,
+            messages=payload.messages,
+            username=username,
+            chat_id=payload.chat_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"mode": "spec", "spec": spec}
+
+
+class CodeFromSpecPayload(BaseModel):
+    message: str = ""
+    chat_id: str | None = None
+    spec: dict[str, Any]
+    messages: list[dict[str, Any]] | None = None
+
+
+@app.post("/api/chat/code")
+def chat_generate_code(
+    payload: CodeFromSpecPayload, request: Request
+) -> StreamingResponse:
+    """'확인 후 진행' 모드 2단계: (사용자가 검토/수정한) 명세로 코드 생성."""
+    username = _require_session(request)
+
+    # 사용자가 수정한 명세를 다시 저장 (최신본 갱신)
+    try:
+        pipeline.save_spec(
+            username=username,
+            chat_id=payload.chat_id,
+            spec=payload.spec,
+            user_message=payload.message,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    def stream():
+        try:
+            for chunk in pipeline.generate_code_from_spec(
+                spec=payload.spec,
+                user_message=payload.message,
+                messages=payload.messages,
+                username=username,
+                chat_id=payload.chat_id,
+            ):
+                if chunk:
+                    yield chunk
+        except Exception as exc:  # noqa: BLE001
+            yield f"\n\n[서버 오류] {exc}"
+
+    return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Spec management (per-user)
+# ---------------------------------------------------------------------------
+SPECS_DIR = ROOT / "specs"
+
+
+@app.get("/api/specs")
+def list_specs(request: Request) -> dict[str, Any]:
+    """현재 로그인한 사용자의 저장된 명세서 목록을 반환합니다."""
+    username = _require_session(request)
+    user_dir = SPECS_DIR / username
+    if not user_dir.exists():
+        return {"specs": []}
+    specs: list[dict[str, Any]] = []
+    for path in sorted(user_dir.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        specs.append(
+            {
+                "file": path.name,
+                "chat_id": record.get("chat_id"),
+                "saved_at": record.get("saved_at"),
+                "user_message": record.get("user_message"),
+                "project": (record.get("spec") or {}).get("project"),
+            }
+        )
+    return {"specs": specs}
+
+
+@app.get("/api/specs/{chat_id}")
+def get_spec(chat_id: str, request: Request) -> dict[str, Any]:
+    username = _require_session(request)
+    spec = Pipeline.load_spec(username=username, chat_id=chat_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="명세서를 찾을 수 없습니다")
+    return {"spec": spec}
+
+
 _ensure_default_user()
+
+
+# ---------------------------------------------------------------------------
+# 미리보기 iframe 정적 자산 처리 (style.css, script.js 404 방지)
+# ---------------------------------------------------------------------------
+# 생성된 HTML이 단일 파일 내 인라인이 아닌 외부 파일(style.css, script.js 등)을
+# 참조할 경우, 미리보기 iframe이 현재 서버 오리진에서 해당 파일을 요청합니다.
+# 파일이 존재하지 않아 404가 발생하면 로그가 지저분해지므로, 정적 자산 확장자로
+# 보이는 경로는 빈 컨텐츠(204)로 조용히 응답합니다.
+_STATIC_PREVIEW_EXTS = (
+    ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf",
+)
+
+
+@app.get("/{asset_path:path}")
+def preview_static_fallback(asset_path: str) -> Response:
+    lowered = asset_path.lower()
+    if lowered.endswith(_STATIC_PREVIEW_EXTS):
+        # 미리보기용 빈 응답 — 로그에 404가 남지 않도록 204 반환
+        if lowered.endswith(".css"):
+            return Response(content="", media_type="text/css", status_code=204)
+        if lowered.endswith((".js", ".mjs")):
+            return Response(
+                content="", media_type="application/javascript", status_code=204
+            )
+        return Response(status_code=204)
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 if __name__ == "__main__":
