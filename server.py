@@ -307,7 +307,10 @@ def save_chats(payload: SaveChatsPayload, request: Request) -> dict:
     CHAT_LOGS_DIR.mkdir(exist_ok=True)
 
     settings = _sanitize_settings(payload.settings)
-    chats = [_sanitize_chat(chat) for chat in payload.chats if isinstance(chat, dict)]
+    # 원본(타임스탬프 포함) chats 로 먼저 감사 로그를 만든 뒤, sanitize 된 버전은
+    # 복원용 state.json 에만 사용한다.
+    raw_chats = [chat for chat in payload.chats if isinstance(chat, dict)]
+    chats = [_sanitize_chat(chat) for chat in raw_chats]
 
     # 1) 복원용 상태 파일 — chat_logs/<user>/state.json
     state_path = _state_path(username)
@@ -322,12 +325,40 @@ def save_chats(payload: SaveChatsPayload, request: Request) -> dict:
 
     # 2) 턴 단위 감사 로그 — chat_logs/<user>/log.jsonl
     #    한 줄당 {"date","time","input","response"} 만 담음.
-    logs = _build_simple_logs(chats)
+    #    append-only: 이미 기록된 턴은 건너뛰고 새 턴만 끝에 추가해서
+    #    날짜/시간 정보가 덮어써지지 않도록 한다.
+    logs = _build_simple_logs(raw_chats)
     jsonl_path = _jsonl_path(username)
-    with jsonl_path.open("w", encoding="utf-8") as f:
-        for entry in logs:
-            f.write(json.dumps(entry, ensure_ascii=False))
-            f.write("\n")
+
+    seen: set[tuple[str, str]] = set()
+    if jsonl_path.exists():
+        try:
+            for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    seen.add((str(rec.get("input", "")), str(rec.get("response", ""))))
+        except OSError:
+            seen = set()
+
+    new_entries: list[dict[str, Any]] = []
+    for entry in logs:
+        key = (str(entry.get("input", "")), str(entry.get("response", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        new_entries.append(entry)
+
+    if new_entries:
+        with jsonl_path.open("a", encoding="utf-8") as f:
+            for entry in new_entries:
+                f.write(json.dumps(entry, ensure_ascii=False))
+                f.write("\n")
 
     # 3) 구 단일 파일은 더 이상 쓰지 않음 — 있으면 조용히 제거하여 혼란 방지
     legacy = _legacy_single_file_path(username)

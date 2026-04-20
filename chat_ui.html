@@ -1757,8 +1757,21 @@ function parseMarkdown(text) {
 /* ════════════════════════════════════════════
  * Code block
  * ════════════════════════════════════════════ */
+// 파일경로(src/main.jsx)가 lang으로 들어오는 경우 확장자로 언어 추정
+function resolveLang(lang) {
+  let l = (lang || '').toLowerCase();
+  if (l.includes('.')) {
+    const ext = l.split('.').pop();
+    const map = { html: 'html', htm: 'html', js: 'javascript', mjs: 'javascript',
+      jsx: 'jsx', ts: 'typescript', tsx: 'tsx', dart: 'dart' };
+    if (map[ext]) l = map[ext];
+  }
+  return l;
+}
+
 function createCodeBlock(code, lang) {
-  const isPreviewable = ['html', 'jsx', 'tsx', 'javascript', 'dart'].includes(lang.toLowerCase());
+  const resolvedLang = resolveLang(lang);
+  const isPreviewable = ['html', 'jsx', 'tsx', 'javascript', 'dart'].includes(resolvedLang);
   const div = document.createElement('div');
   div.className = 'code-block';
   div.dataset.code = code;
@@ -1778,7 +1791,7 @@ function createCodeBlock(code, lang) {
       </div>
     </div>
     <div class="code-content">${highlightCode(code, lang)}</div>`;
-  if (isPreviewable) div.querySelector('.preview-btn').onclick = () => openPreview(code, lang);
+  if (isPreviewable) div.querySelector('.preview-btn').onclick = () => openPreview(code, resolvedLang, div, lang);
   div.querySelector('.copy-code-btn').onclick = (e) => {
     copyText(code);
     const b = e.currentTarget;
@@ -1840,9 +1853,37 @@ function highlightCode(code, lang) {
  * ════════════════════════════════════════════ */
 let currentPreviewLang = 'html';
 
-function openPreview(code, lang = 'html') {
+// 같은 메시지(부모 컨테이너) 안의 모든 code-block 을 {경로: 코드} 맵으로 수집
+let currentPreviewFiles = {};
+let currentPreviewEntryPath = '';
+
+function gatherSiblingFiles(triggerEl) {
+  const files = {};
+  if (!triggerEl) return files;
+  let parent = triggerEl.parentElement;
+  // 메시지 본문 컨테이너를 찾을 때까지 위로 (보통 직속 부모가 .content)
+  for (let i = 0; i < 5 && parent; i++) {
+    const blocks = parent.querySelectorAll('.code-block');
+    if (blocks.length >= 1) {
+      blocks.forEach(blk => {
+        const path = blk.dataset.lang || '';
+        const content = blk.dataset.code || '';
+        if (path && content && path.includes('.')) {
+          files[path] = content;
+        }
+      });
+      if (blocks.length >= 1) break;
+    }
+    parent = parent.parentElement;
+  }
+  return files;
+}
+
+function openPreview(code, lang = 'html', triggerEl = null, originalLang = '') {
   currentPreviewCode = code;
   currentPreviewLang = (lang || 'html').toLowerCase();
+  currentPreviewFiles = gatherSiblingFiles(triggerEl);
+  currentPreviewEntryPath = originalLang || '';
   previewPanel.classList.add('open');
   switchPreviewTab('preview');
 }
@@ -1853,6 +1894,156 @@ function closePreview() {
 }
 
 // 언어별 미리보기 srcdoc 빌더
+// 다중 파일 React 프로젝트를 가상 모듈 시스템으로 렌더링
+// - .css 는 <style> 로 주입
+// - .jsx/.tsx/.js/.ts 는 Babel 로 CommonJS 변환 후 require 체인으로 실행
+// - import 'react'/'react-dom'/'react-dom/client' 는 내장 매핑
+function buildReactMultiFilePreview(files, preferredEntry) {
+  // 엔트리 후보: main.jsx → index.jsx → App.jsx 순
+  const entryCandidates = [
+    preferredEntry,
+    'src/main.jsx', 'src/main.tsx', 'src/index.jsx', 'src/index.tsx',
+    'main.jsx', 'main.tsx', 'index.jsx', 'index.tsx',
+  ].filter(Boolean);
+
+  let entry = null;
+  let manualMount = false;
+  for (const c of entryCandidates) {
+    if (files[c]) { entry = c; break; }
+  }
+  // createRoot/ReactDOM.render 호출을 포함한 파일
+  if (!entry) {
+    for (const p in files) {
+      if (/\.(jsx|tsx|js)$/i.test(p) && /createRoot|ReactDOM\.render/.test(files[p])) {
+        entry = p; break;
+      }
+    }
+  }
+  // App.jsx 로 폴백 (수동 마운트)
+  if (!entry) {
+    for (const p in files) {
+      if (/(^|\/)App\.(jsx|tsx)$/i.test(p)) { entry = p; manualMount = true; break; }
+    }
+  }
+  if (!entry) {
+    return `<!DOCTYPE html><html><body><div style="color:#c00;padding:16px;font-family:monospace">엔트리 파일을 찾을 수 없습니다. (main.jsx / index.jsx / App.jsx 중 하나가 필요)</div></body></html>`;
+  }
+
+  const filesJson = JSON.stringify(files);
+  return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>React Preview</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:16px;background:#fff;color:#111;}</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  const __files = ${filesJson};
+  const __modules = {};
+  const __reactExports = Object.assign({ default: React, __esModule: true }, React);
+  const __reactDomExports = Object.assign({ default: ReactDOM, __esModule: true }, ReactDOM);
+  const __builtins = {
+    'react': __reactExports,
+    'react-dom': __reactDomExports,
+    'react-dom/client': __reactDomExports,
+  };
+
+  function resolvePath(from, to) {
+    if (__builtins[to]) return to;
+    const fromDir = from ? from.split('/').slice(0, -1).join('/') : '';
+    let abs;
+    if (to.startsWith('./') || to.startsWith('../')) {
+      const parts = (fromDir ? fromDir.split('/') : []).concat(to.split('/'));
+      const out = [];
+      for (const p of parts) {
+        if (p === '' || p === '.') continue;
+        if (p === '..') out.pop();
+        else out.push(p);
+      }
+      abs = out.join('/');
+    } else {
+      abs = to;
+    }
+    if (__files[abs]) return abs;
+    const exts = ['.jsx', '.tsx', '.js', '.ts', '.css',
+                  '/index.jsx', '/index.tsx', '/index.js', '/index.ts'];
+    for (const ext of exts) {
+      if (__files[abs + ext]) return abs + ext;
+    }
+    // 케이스 무시 매칭 (모델이 대소문자를 섞어 내는 경우 대비)
+    const lower = abs.toLowerCase();
+    for (const key of Object.keys(__files)) {
+      if (key.toLowerCase() === lower) return key;
+      for (const ext of exts) {
+        if (key.toLowerCase() === lower + ext) return key;
+      }
+    }
+    throw new Error('Module not found: ' + to + ' (from ' + (from || '<entry>') + ')');
+  }
+
+  function requireModule(request, fromPath) {
+    const resolved = resolvePath(fromPath, request);
+    if (__builtins[resolved]) return __builtins[resolved];
+    if (__modules[resolved]) return __modules[resolved].exports;
+
+    const src = __files[resolved];
+    if (resolved.endsWith('.css')) {
+      const style = document.createElement('style');
+      style.textContent = src;
+      document.head.appendChild(style);
+      __modules[resolved] = { exports: {} };
+      return __modules[resolved].exports;
+    }
+
+    const isTS = /\\.tsx?$/.test(resolved);
+    const presets = isTS
+      ? [['react'], ['typescript', { allExtensions: true, isTSX: true }]]
+      : [['react']];
+    let transformed;
+    try {
+      transformed = Babel.transform(src, {
+        presets: presets,
+        plugins: ['transform-modules-commonjs'],
+        filename: resolved,
+      }).code;
+    } catch (e) {
+      throw new Error('Babel 변환 실패 (' + resolved + '): ' + (e.message || e));
+    }
+
+    const mod = { exports: {} };
+    __modules[resolved] = mod;
+    try {
+      const fn = new Function('require', 'module', 'exports', 'React', 'ReactDOM', transformed);
+      fn(function(p) { return requireModule(p, resolved); }, mod, mod.exports, React, ReactDOM);
+    } catch (e) {
+      throw new Error('실행 오류 (' + resolved + '): ' + (e.message || e));
+    }
+    return mod.exports;
+  }
+
+  try {
+    const entryExports = requireModule('./' + '${entry}', '');
+    ${manualMount ? `
+      const AppComp = entryExports.default || entryExports.App || entryExports;
+      if (!AppComp) throw new Error('App 컴포넌트를 export 해주세요.');
+      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(AppComp));
+    ` : '// entry 파일이 자체적으로 createRoot 호출'}
+  } catch (e) {
+    document.getElementById('root').innerHTML =
+      '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">' +
+      (e && e.message ? e.message : String(e)) +
+      (e && e.stack ? '\\n\\n' + e.stack : '') + '</pre>';
+  }
+<\/script>
+</body>
+</html>`;
+}
+
 function buildPreviewSrcdoc(code, lang) {
   const l = (lang || 'html').toLowerCase();
   if (l === 'html') return code;
@@ -1884,12 +2075,19 @@ function buildPreviewSrcdoc(code, lang) {
   }
 
   if (l === 'jsx' || l === 'tsx' || l === 'javascript') {
-    // React + Babel 런타임으로 JSX를 브라우저에서 즉시 실행.
-    // import 문은 제거하고, 최상위 컴포넌트명으로 App/Main/Root 중 첫 번째를 mount.
+    // 다중 파일이면 가상 모듈 시스템으로 실행 (Vite 스타일 프로젝트 지원)
+    const files = currentPreviewFiles || {};
+    const multiFile = Object.keys(files).filter(p => /\.(jsx|tsx|js|ts|css)$/i.test(p)).length >= 2;
+    if (multiFile) {
+      return buildReactMultiFilePreview(files, currentPreviewEntryPath);
+    }
+
+    // 단일 파일 폴백: import/export 제거 + React hooks 전역 노출
     const sanitized = code
       .replace(/^\s*import\s.+?;?\s*$/gm, '')
       .replace(/^\s*export\s+default\s+/gm, '')
       .replace(/^\s*export\s+/gm, '');
+    const presets = (l === 'tsx') ? 'react,typescript' : 'react';
     return `<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -1899,25 +2097,39 @@ function buildPreviewSrcdoc(code, lang) {
 <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+<script>
+  // React hooks 와 자주 쓰는 API 를 전역으로 노출 — import 제거된 코드가 바로 쓰게.
+  window.useState = React.useState;
+  window.useEffect = React.useEffect;
+  window.useRef = React.useRef;
+  window.useMemo = React.useMemo;
+  window.useCallback = React.useCallback;
+  window.useContext = React.useContext;
+  window.useReducer = React.useReducer;
+  window.useLayoutEffect = React.useLayoutEffect;
+  window.Fragment = React.Fragment;
+  window.createContext = React.createContext;
+<\/script>
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react">
+<script type="text/babel" data-presets="${presets}">
 try {
 ${sanitized}
 
-  const rootEl = document.getElementById('root');
-  const Root = (typeof App !== 'undefined' && App)
-            || (typeof Main !== 'undefined' && Main)
-            || (typeof Root !== 'undefined' && Root);
-  if (!Root) {
-    rootEl.innerHTML = '<div style="color:#c00;font-family:monospace">App / Main / Root 컴포넌트를 찾을 수 없습니다.</div>';
+  const __rootEl = document.getElementById('root');
+  const __rootComp = (typeof App !== 'undefined' && App)
+                  || (typeof Main !== 'undefined' && Main)
+                  || (typeof Page !== 'undefined' && Page)
+                  || (typeof Home !== 'undefined' && Home);
+  if (!__rootComp) {
+    __rootEl.innerHTML = '<div style="color:#c00;font-family:monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">최상위 컴포넌트를 찾을 수 없습니다. 컴포넌트 이름을 <code>App</code>, <code>Main</code>, <code>Page</code>, <code>Home</code> 중 하나로 지정해 주세요.</div>';
   } else {
-    ReactDOM.createRoot(rootEl).render(React.createElement(Root));
+    ReactDOM.createRoot(__rootEl).render(React.createElement(__rootComp));
   }
 } catch (e) {
   document.getElementById('root').innerHTML =
-    '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace">런타임 오류: ' + (e && e.message ? e.message : e) + '</pre>';
+    '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">런타임 오류: ' + (e && e.message ? e.message : e) + (e && e.stack ? '\\n\\n' + e.stack : '') + '</pre>';
 }
 <\/script>
 </body>
