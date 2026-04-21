@@ -42,6 +42,7 @@ COMPLEXITY_INDICATORS = (
 )
 
 VALID_INTENTS = ("chat", "simple_code", "full_spec_code")
+VALID_CONFIDENCE = ("high", "low")
 
 
 def is_simple_question(user_message: str) -> bool:
@@ -120,8 +121,13 @@ def normalize_route(raw: dict[str, Any], user_message: str) -> dict[str, Any]:
     needs = raw.get("needs_external_data")
     if not isinstance(needs, bool):
         needs = needs_external_data(user_message)
+    confidence = raw.get("confidence")
+    if confidence not in VALID_CONFIDENCE:
+        # 필드 누락/오타는 "high" 로 간주 — 폴백을 남용하지 않는다
+        confidence = "high"
     return {
         "intent": intent,
         "complexity": complexity,
         "needs_external_data": needs,
+        "confidence": confidence,
     }

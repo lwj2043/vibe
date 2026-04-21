@@ -348,6 +348,15 @@
   }
   .msg-action-btn:hover { background: var(--bg3); color: var(--text); }
   .msg-action-btn.active { color: var(--accent-color); }
+  .combined-preview-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 8px; padding: 6px 12px;
+    background: var(--text); color: var(--bg);
+    border: 1px solid var(--text); border-radius: 7px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .combined-preview-btn:hover { opacity: 0.85; }
 
   /* Code block */
   .code-block {
@@ -1613,6 +1622,8 @@ function renderMessage(msg, index) {
         content.appendChild(createCodeBlock(cb.code, cb.lang));
       }
     });
+    const combinedBtn = maybeCreateCombinedPreviewButton(content);
+    if (combinedBtn) content.appendChild(combinedBtn);
     if (elapsedLabel) { const t = document.createElement('div'); t.className = 'msg-time'; t.textContent = elapsedLabel; div.appendChild(t); }
     div.appendChild(buildMessageActions(msg, index));
   }
@@ -2173,6 +2184,144 @@ ${sanitized}
   }
 
   return code;
+}
+
+/* ════════════════════════════════════════════
+ * Combined preview — 메시지 내 모든 파일을 한 화면에 합쳐서 미리보기
+ * (pipelines/preview_builder.py 의 JS 포팅)
+ * ════════════════════════════════════════════ */
+const _HTML_EXTS = ['.html', '.htm'];
+const _CSS_EXTS = ['.css'];
+const _JS_EXTS = ['.js', '.mjs'];
+
+function _hasExt(path, exts) {
+  const p = (path || '').toLowerCase();
+  return exts.some(e => p.endsWith(e));
+}
+
+function _pickHtmlEntry(files) {
+  const names = Object.keys(files);
+  for (const pref of ['index.html', 'index.htm']) {
+    const hit = names.find(n => n.toLowerCase() === pref || n.toLowerCase().endsWith('/' + pref));
+    if (hit) return hit;
+  }
+  return names.find(n => _hasExt(n, _HTML_EXTS)) || null;
+}
+
+function buildCombinedHtmlSrcdoc(files) {
+  const entry = _pickHtmlEntry(files);
+  if (!entry) return null;
+  let html = files[entry];
+  const used = new Set([entry]);
+
+  // <link rel="stylesheet" href="X.css"> → <style>...</style>
+  html = html.replace(
+    /<link\b[^>]*?rel=["']stylesheet["'][^>]*?href=["']([^"']+)["'][^>]*?>/gi,
+    (match, href) => {
+      const key = Object.keys(files).find(
+        k => k === href || k.endsWith('/' + href) || href.endsWith(k)
+      );
+      if (key && _hasExt(key, _CSS_EXTS)) {
+        used.add(key);
+        return `<style>\n${files[key]}\n</style>`;
+      }
+      return match;
+    }
+  );
+
+  // <script src="X.js"></script> → <script>...</script>
+  html = html.replace(
+    /<script\b[^>]*?src=["']([^"']+)["'][^>]*?><\/script>/gi,
+    (match, src) => {
+      const key = Object.keys(files).find(
+        k => k === src || k.endsWith('/' + src) || src.endsWith(k)
+      );
+      if (key && _hasExt(key, _JS_EXTS)) {
+        used.add(key);
+        return `<script>\n${files[key]}\n<\/script>`;
+      }
+      return match;
+    }
+  );
+
+  // 참조되지 않은 CSS/JS 파일을 </body> 앞에 자동 주입
+  const orphanStyle = Object.keys(files)
+    .filter(k => !used.has(k) && _hasExt(k, _CSS_EXTS))
+    .map(k => `<style>\n${files[k]}\n</style>`).join('\n');
+  const orphanScript = Object.keys(files)
+    .filter(k => !used.has(k) && _hasExt(k, _JS_EXTS))
+    .map(k => `<script>\n${files[k]}\n<\/script>`).join('\n');
+  const tail = orphanStyle + orphanScript;
+  if (tail) {
+    if (/<\/body>/i.test(html)) {
+      html = html.replace(/<\/body>/i, tail + '</body>');
+    } else {
+      html += tail;
+    }
+  }
+  return html;
+}
+
+function collectMessageFiles(contentEl) {
+  const files = {};
+  contentEl.querySelectorAll('.code-block').forEach(blk => {
+    const path = blk.dataset.lang || '';
+    const content = blk.dataset.code || '';
+    if (path && content && path.includes('.')) {
+      files[path] = content;
+    }
+  });
+  return files;
+}
+
+function openCombinedPreview(files) {
+  // React 파일이 섞여 있으면 React 빌더, 아니면 HTML 결합 빌더
+  const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
+  let srcdoc;
+  let langLabel;
+  if (hasReact) {
+    srcdoc = buildReactMultiFilePreview(files, '');
+    langLabel = 'jsx';
+  } else {
+    srcdoc = buildCombinedHtmlSrcdoc(files);
+    if (!srcdoc) {
+      toast && toast('미리보기를 만들 수 있는 HTML/JSX 파일이 없습니다');
+      return;
+    }
+    langLabel = 'html';
+  }
+  currentPreviewCode = srcdoc;
+  currentPreviewLang = langLabel;
+  currentPreviewFiles = files;
+  currentPreviewEntryPath = '';
+  previewPanel.classList.add('open');
+  // 위의 switchPreviewTab 은 buildPreviewSrcdoc 을 다시 호출하므로,
+  // React 가 아닌 경우에는 이미 합쳐진 HTML 을 직접 iframe 에 넣는다.
+  document.querySelectorAll('.preview-tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.tab === 'preview'));
+  $('preview-frame').style.display = 'block';
+  $('preview-code-view').style.display = 'none';
+  $('preview-frame').srcdoc = srcdoc;
+}
+
+function maybeCreateCombinedPreviewButton(contentEl) {
+  const files = collectMessageFiles(contentEl);
+  const paths = Object.keys(files);
+  if (paths.length < 2) return null;  // 파일이 1개면 기존 개별 미리보기로 충분
+  const hasRenderable = paths.some(p =>
+    /\.(html?|jsx|tsx)$/i.test(p));
+  if (!hasRenderable) return null;
+
+  const btn = document.createElement('button');
+  btn.className = 'combined-preview-btn';
+  btn.innerHTML = `
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+    🖥️ 전체 미리보기 (${paths.length}개 파일)`;
+  btn.onclick = () => openCombinedPreview(collectMessageFiles(contentEl));
+  return btn;
 }
 
 function switchPreviewTab(tab) {

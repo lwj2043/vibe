@@ -1,6 +1,9 @@
 {
-  "_comment": "원격 Ollama 서버를 쓰려면 ollama_url에 해당 IP와 포트를 넣습니다.",
-  "ollama_url": "http://host.docker.internal:11434",
-  "plan_model": "모델명 입력",
-  "dev_model": "모델명 입력"
+  "_comment": "OpenAI 호환 API 엔드포인트. base_url 은 /v1 까지 포함합니다.",
+  "base_url": "http://192.168.100.13:8000/v1",
+  "model": "gemma-4-31b-it",
+  "api_key": "",
+  "max_review_iterations": 0,
+  "review_safety_cap": 50,
+  "enable_visual_review": true
 }
