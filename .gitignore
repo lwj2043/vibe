@@ -17,3 +17,4 @@ specs/*
 server.err.log
 server.out.log
 server.log
+test.py
