@@ -71,7 +71,9 @@ def parse_json(text: str) -> dict[str, Any]:
 
 
 def validate_spec(spec: dict[str, Any]) -> None:
-    required = {"project", "files", "components", "api", "constraints", "user_story"}
+    required = {
+        "project", "features", "files", "components", "api", "constraints", "user_story"
+    }
     missing = sorted(required - set(spec))
     if missing:
         raise ValueError(f"Missing required keys: {', '.join(missing)}")
@@ -80,6 +82,20 @@ def validate_spec(spec: dict[str, Any]) -> None:
     for item in spec["files"]:
         if not isinstance(item, dict) or not item.get("path"):
             raise ValueError("each file item must include a path")
+    if not isinstance(spec["features"], list) or not spec["features"]:
+        raise ValueError("features must be a non-empty list")
+    for feat in spec["features"]:
+        if not isinstance(feat, dict):
+            raise ValueError("each feature must be an object")
+        if not feat.get("id") or not isinstance(feat["id"], str):
+            raise ValueError("each feature must have an 'id' string")
+        if not feat.get("description") or not isinstance(feat["description"], str):
+            raise ValueError("each feature must have a 'description' string")
+        criteria = feat.get("acceptance_criteria")
+        if not isinstance(criteria, list) or not criteria:
+            raise ValueError(
+                f"feature {feat.get('id')} must have a non-empty acceptance_criteria list"
+            )
     project = spec.get("project", {})
     if not isinstance(project, dict):
         raise ValueError("project must be an object")
@@ -184,7 +200,7 @@ def format_model_error(stage: str, exc: Exception, ollama_url: str) -> str:
     return f"{stage} 중 모델 호출에 실패했습니다: {message}"
 
 
-def stream_text(text: str, chunk_size: int = 600) -> Generator[str, None, None]:
+def stream_text(text: str, chunk_size: int = 32) -> Generator[str, None, None]:
     for index in range(0, len(text), chunk_size):
         yield text[index : index + chunk_size]
 

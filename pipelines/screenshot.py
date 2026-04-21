@@ -36,11 +36,25 @@ def render_html_screenshot(
     height: int = DEFAULT_VIEWPORT_HEIGHT,
     full_page: bool = True,
 ) -> bytes | None:
-    """Render ``html`` in headless Chromium and return a PNG bytes, or ``None``.
+    """후방 호환: PNG bytes 만 반환."""
+    result = render_html_with_diagnostics(html, width=width, height=height, full_page=full_page)
+    return result[0] if result else None
 
-    Returns ``None`` when:
-    - Playwright (or the Chromium binary) is not installed
-    - Rendering fails for any reason (timeout, JS error, etc.)
+
+def render_html_with_diagnostics(
+    html: str,
+    width: int = DEFAULT_VIEWPORT_WIDTH,
+    height: int = DEFAULT_VIEWPORT_HEIGHT,
+    full_page: bool = True,
+) -> tuple[bytes, list[str]] | None:
+    """Render ``html`` and return ``(png_bytes, runtime_errors)`` or ``None``.
+
+    ``runtime_errors`` 는 헤드리스 렌더링 중 잡힌 JS 콘솔 에러 + 페이지 예외 메시지
+    리스트. 없으면 빈 리스트.
+
+    ``None`` 반환 조건:
+    - Playwright (또는 Chromium) 미설치
+    - 렌더 자체가 실패 (타임아웃 등)
     """
     if not html:
         return None
@@ -55,6 +69,11 @@ def render_html_screenshot(
         )
         return None
 
+    errors: list[str] = []
+
+    def _truncate(msg: str, limit: int = 300) -> str:
+        return msg if len(msg) <= limit else msg[:limit] + "…"
+
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
@@ -68,16 +87,34 @@ def render_html_screenshot(
                 )
                 page = context.new_page()
                 page.set_default_timeout(_RENDER_TIMEOUT_MS)
-                # set_content 는 네트워크 자원이 올 필요는 없지만 CDN JS(React 등) 가
-                # 있으면 기다려야 한다. 실패 시 'domcontentloaded' 폴백.
+
+                def _on_console(msg):
+                    if msg.type in ("error", "warning"):
+                        errors.append(_truncate(f"[console.{msg.type}] {msg.text}"))
+
+                def _on_pageerror(exc):
+                    errors.append(_truncate(f"[pageerror] {exc}"))
+
+                def _on_requestfailed(req):
+                    # 외부 리소스 실패는 소음이 많아 제외, 단 상대경로/자체 리소스만 포함
+                    url = req.url
+                    if url.startswith("data:") or url.startswith("blob:"):
+                        return
+                    errors.append(
+                        _truncate(f"[requestfailed] {url} — {req.failure}")
+                    )
+
+                page.on("console", _on_console)
+                page.on("pageerror", _on_pageerror)
+                page.on("requestfailed", _on_requestfailed)
+
                 try:
                     page.set_content(html, wait_until="networkidle")
                 except PlaywrightError:
                     page.set_content(html, wait_until="domcontentloaded")
-                # 애니메이션/JS 초기화를 위한 짧은 대기
                 page.wait_for_timeout(500)
                 png = page.screenshot(full_page=full_page, type="png")
-                return png
+                return png, errors
             finally:
                 browser.close()
     except Exception as exc:  # noqa: BLE001
@@ -85,4 +122,8 @@ def render_html_screenshot(
         return None
 
 
-__all__ = ["playwright_available", "render_html_screenshot"]
+__all__ = [
+    "playwright_available",
+    "render_html_screenshot",
+    "render_html_with_diagnostics",
+]

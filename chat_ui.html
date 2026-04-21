@@ -4,6 +4,26 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Vibe Coding Chat</title>
+<script>
+  // 테마 flicker 방지: body 렌더 전에 저장된 설정(또는 OS 선호)으로 light 클래스 선적용.
+  (function () {
+    try {
+      var user = localStorage.getItem('vibe_auth_user') || '_guest';
+      var raw = localStorage.getItem('vibe_chat_state_' + user);
+      var pref = 'system';
+      if (raw) {
+        var s = JSON.parse(raw);
+        if (s && s.settings && s.settings.theme) pref = s.settings.theme;
+      }
+      var isLight = pref === 'light' || (
+        pref === 'system' &&
+        window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: light)').matches
+      );
+      if (isLight) document.documentElement.classList.add('light');
+    } catch (e) {}
+  })();
+</script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -385,7 +405,7 @@
     padding: 14px 16px;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
     font-size: 12.5px; line-height: 1.6; color: #d4d4d4;
-    overflow-x: auto; white-space: pre; max-height: 420px; overflow-y: auto;
+    overflow-x: auto; white-space: pre;
   }
   html.light .code-content { color: #2d2d2d; }
 
@@ -686,8 +706,29 @@
   }
   .login-card button.secondary:hover { background: var(--bg3); opacity: 1; }
   .assistant-loading { color: var(--text3); display: flex; align-items: center; gap: 8px; }
-  .assistant-loading-text { display: inline-flex; align-items: baseline; }
-  .assistant-loading-dots { display: inline-flex; margin-left: 2px; }
+  .assistant-loading-text {
+    display: inline-flex; align-items: baseline;
+    font-size: 18px; font-weight: 600; letter-spacing: 0.01em;
+    background: linear-gradient(90deg,
+      var(--text3) 0%,
+      var(--text3) 35%,
+      var(--text) 50%,
+      var(--text3) 65%,
+      var(--text3) 100%);
+    background-size: 250% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: loading-shimmer 2.2s linear infinite;
+  }
+  @keyframes loading-shimmer {
+    0%   { background-position: 150% 0; }
+    100% { background-position: -150% 0; }
+  }
+  /* 점 애니메이션은 shimmer 영향 받지 않도록 배경 리셋 */
+  .assistant-loading-dots {
+    display: inline-flex; margin-left: 2px;
+    background: none; -webkit-text-fill-color: var(--text3); color: var(--text3);
+  }
   .assistant-loading-dots span {
     display: inline-block;
     animation: dotWave 1.2s ease-in-out infinite;
@@ -846,6 +887,22 @@
   }
   .spec-list-item:hover .spec-remove-btn { opacity: 1; }
   .spec-remove-btn:hover { background: rgba(255, 80, 80, 0.15); color: #ff5050; }
+  /* 기능(feature) 아이템 */
+  .spec-feature-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    background: var(--bg2);
+    position: relative;
+  }
+  .spec-feature-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  }
+  .spec-feature-head .spec-feature-desc { flex: 1; }
+  .spec-feature-head .spec-remove-btn { opacity: 0.4; }
+  .spec-feature-item:hover .spec-feature-head .spec-remove-btn { opacity: 1; }
+  .spec-feature-criteria { width: 100%; font-size: 13px; }
   .spec-add-btn {
     margin-top: 6px;
     padding: 4px 10px;
@@ -980,7 +1037,7 @@
 
 <!-- ════════ Login Overlay ════════ -->
 <div id="login-overlay">
-  <form class="login-card" id="login-form" autocomplete="on">
+  <form class="login-card" id="login-form" autocomplete="on" onsubmit="handleLogin(event); return false;">
     <h1>Vibe Coding</h1>
     <p>로그인하여 시작하세요</p>
     <label for="login-username">아이디</label>
@@ -992,7 +1049,7 @@
     <div class="login-switch">계정이 없으신가요? <a onclick="showSignup()">회원가입</a></div>
   </form>
 
-  <form class="login-card is-hidden" id="signup-form" autocomplete="off">
+  <form class="login-card is-hidden" id="signup-form" autocomplete="off" onsubmit="handleSignup(event); return false;">
     <h1>Vibe Coding</h1>
     <p>새 계정을 만드세요</p>
     <label for="signup-username">아이디</label>
@@ -1398,7 +1455,38 @@ function saveState() {
 }
 
 function saveStateLocal() {
-  localStorage.setItem(_stateKey(), JSON.stringify(STATE));
+  const key = _stateKey();
+  // 1) 전체 저장 시도
+  try {
+    localStorage.setItem(key, JSON.stringify(STATE));
+    return;
+  } catch (e) {
+    if (!(e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014))) {
+      // 다른 예외는 삼키지 않음
+      console.error('로컬 상태 저장 실패:', e);
+      return;
+    }
+  }
+  // 2) 할당량 초과 → 현재 채팅만 남기고 축소 저장
+  try {
+    const current = STATE.chats.find(c => c.id === STATE.currentChatId);
+    const minimal = {
+      chats: current ? [current] : [],
+      currentChatId: current ? current.id : null,
+      notes: '',
+      settings: STATE.settings,
+    };
+    localStorage.setItem(key, JSON.stringify(minimal));
+    return;
+  } catch (_) {}
+  // 3) 그래도 넘치면 settings 만 저장
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      chats: [], currentChatId: null, notes: '', settings: STATE.settings,
+    }));
+  } catch (_) {
+    // 최종 실패는 무시 — 서버가 원본이므로 기능은 유지됨
+  }
 }
 
 async function saveStateToServer() {
@@ -2229,7 +2317,7 @@ function buildCombinedHtmlSrcdoc(files) {
     }
   );
 
-  // <script src="X.js"></script> → <script>...</script>
+  // <script src="X.js"><\/script> → <script>...<\/script>
   html = html.replace(
     /<script\b[^>]*?src=["']([^"']+)["'][^>]*?><\/script>/gi,
     (match, src) => {
@@ -2407,6 +2495,12 @@ function updateStreamingContent(contentEl, text) {
   // 미완성 코드펜스가 있으면 임시로 닫아서 렌더가 깨지지 않도록 한다
   const fenceCount = (text.match(/```/g) || []).length;
   const safeText = fenceCount % 2 === 1 ? text + '\n```' : text;
+
+  // 재렌더 전에 현재 <details>의 열림 상태를 순서대로 보존 — 그렇지 않으면
+  // 사용자가 "생성된 명세서" 같은 블록을 연 직후 다음 청크가 도착하면서
+  // innerHTML 가 통째로 새로 쓰여 다시 닫혀버린다.
+  const prevOpenStates = Array.from(contentEl.querySelectorAll('details')).map(d => d.open);
+
   const parsed = parseMarkdown(safeText);
   contentEl.innerHTML = parsed.html;
   parsed.codeBlocks.forEach((cb, i) => {
@@ -2415,6 +2509,49 @@ function updateStreamingContent(contentEl, text) {
     if (marker) marker.replaceWith(block);
     else contentEl.appendChild(block);
   });
+
+  // 열림 상태 복원
+  contentEl.querySelectorAll('details').forEach((d, i) => {
+    if (prevOpenStates[i]) d.open = true;
+  });
+}
+
+/* ── 서버가 보내는 상태 프레임(\x01STATUS:...\x02) 처리 ──
+ * 들어오는 바이트 스트림에서 제어 프레임만 뽑아 로딩 라벨을 갱신하고,
+ * 나머지는 그대로 반환한다. 프레임이 중간에 끊긴 경우(열림표식만 받고
+ * 닫힘표식이 안 옴)는 다음 청크가 올 때까지 pending 에 남겨둔다.
+ *
+ * 반환: { content: string, pending: string } */
+function extractStatusFrames(pending, onStatus) {
+  let content = '';
+  let rest = pending;
+  while (true) {
+    const begin = rest.indexOf('\x01');
+    if (begin === -1) {
+      content += rest;
+      rest = '';
+      break;
+    }
+    content += rest.slice(0, begin);
+    const end = rest.indexOf('\x02', begin + 1);
+    if (end === -1) {
+      // 아직 닫히지 않은 프레임 — 다음 청크와 합쳐서 다시 파싱
+      rest = rest.slice(begin);
+      break;
+    }
+    const frame = rest.slice(begin + 1, end);
+    if (frame.startsWith('STATUS:') && typeof onStatus === 'function') {
+      onStatus(frame.slice(7));
+    }
+    // 알 수 없는 프레임은 조용히 무시
+    rest = rest.slice(end + 1);
+  }
+  return { content, pending: rest };
+}
+
+function updateLoadingLabel(_loadingDiv, _text) {
+  // 서버의 상태 프레임(명세서 작성 중 / 코드 생성 중 NNN자 누적 등)은
+  // heartbeat 목적으로만 수신하고 UI 라벨은 항상 "잘 생각하기" 로 고정.
 }
 
 /* ════════════════════════════════════════════
@@ -2437,6 +2574,7 @@ function askSpecConfirmation(spec) {
 function buildSpecDoc(spec, { onCancel, onApprove }) {
   // 안전 기본값
   const project = spec.project || {};
+  const features = Array.isArray(spec.features) ? spec.features : [];
   const files = Array.isArray(spec.files) ? spec.files : [];
   const components = Array.isArray(spec.components) ? spec.components : [];
   const apiList = Array.isArray(spec.api) ? spec.api : [];
@@ -2474,6 +2612,12 @@ function buildSpecDoc(spec, { onCancel, onApprove }) {
           <span class="spec-field-label">설명</span>
           <div class="spec-field-value"><textarea class="spec-textarea" rows="2" data-path="project.description"></textarea></div>
         </div>
+      </section>
+
+      <section class="spec-section">
+        <h4>기능 (이 항목이 모두 구현되어야 통과)</h4>
+        <div class="spec-features-body" data-list="features"></div>
+        <button class="spec-add-btn" data-add="features">＋ 기능 추가</button>
       </section>
 
       <section class="spec-section">
@@ -2545,6 +2689,33 @@ function buildSpecDoc(spec, { onCancel, onApprove }) {
   };
   files.forEach(addFileRow);
   doc.querySelector('[data-add="files"]').onclick = () => addFileRow();
+
+  // 기능 리스트
+  const featuresBody = doc.querySelector('[data-list="features"]');
+  let featureAutoId = 1;
+  const addFeatureRow = (feat = null) => {
+    const f = feat || { id: '', description: '', acceptance_criteria: [] };
+    if (!f.id) f.id = `F${featureAutoId}`;
+    featureAutoId += 1;
+    const criteriaText = Array.isArray(f.acceptance_criteria) ? f.acceptance_criteria.join('\n') : '';
+    const item = document.createElement('div');
+    item.className = 'spec-feature-item';
+    item.innerHTML = `
+      <div class="spec-feature-head">
+        <input class="spec-input spec-feature-id" placeholder="ID (예: F1)" style="width:80px">
+        <input class="spec-input spec-feature-desc" placeholder="이 기능이 무엇을 하는지">
+        <button class="spec-remove-btn" title="삭제">×</button>
+      </div>
+      <textarea class="spec-textarea spec-feature-criteria" rows="3" placeholder="인수 기준 (한 줄에 하나씩)"></textarea>
+    `;
+    item.querySelector('.spec-feature-id').value = f.id || '';
+    item.querySelector('.spec-feature-desc').value = f.description || '';
+    item.querySelector('.spec-feature-criteria').value = criteriaText;
+    item.querySelector('.spec-remove-btn').onclick = () => item.remove();
+    featuresBody.appendChild(item);
+  };
+  features.forEach(addFeatureRow);
+  doc.querySelector('[data-add="features"]').onclick = () => addFeatureRow();
 
   // 제약사항 리스트
   const constraintsUl = doc.querySelector('[data-list="constraints"]');
@@ -2637,6 +2808,17 @@ function readSpecDoc(doc, originalSpec) {
     })).filter(f => f.path);
   }
 
+  // 기능 리스트
+  const featuresBody = doc.querySelector('[data-list="features"]');
+  if (featuresBody) {
+    result.features = Array.from(featuresBody.querySelectorAll('.spec-feature-item')).map(item => ({
+      id: item.querySelector('.spec-feature-id').value.trim(),
+      description: item.querySelector('.spec-feature-desc').value.trim(),
+      acceptance_criteria: item.querySelector('.spec-feature-criteria').value
+        .split('\n').map(s => s.trim()).filter(Boolean),
+    })).filter(f => f.id && f.description);
+  }
+
   // 제약 리스트
   const constraintsUl = doc.querySelector('[data-list="constraints"]');
   if (constraintsUl) {
@@ -2648,6 +2830,7 @@ function readSpecDoc(doc, originalSpec) {
   result.components = result.components || [];
   result.api = result.api || [];
   result.user_story = result.user_story || '';
+  result.features = result.features || [];
   return result;
 }
 
@@ -2665,7 +2848,7 @@ async function generateResponse() {
   // 로딩 표시 (우측 끝에 실시간 경과 시간 + 파도타기 점)
   const loadingDiv = createLoadingBubble('응답을 생성하고 있습니다');
   messagesEl.appendChild(loadingDiv);
-  scrollToBottom();
+  scrollToBottom(true);
 
   let fullContent = '';
   const responseStartedAt = Date.now();
@@ -2685,6 +2868,7 @@ async function generateResponse() {
           message: userText,
           chat_id: chat?.id || null,
           messages: contextMessages,
+          attachments: (lastUser && lastUser.attachments) || [],
         }),
       });
       if (specRes.status === 401) { logout(); throw new Error('unauthorized'); }
@@ -2724,7 +2908,7 @@ async function generateResponse() {
       // ── 2단계: 코드 생성 스트림 ────────────────────────
       const loadingDiv2 = createLoadingBubble('코드 생성 중');
       messagesEl.appendChild(loadingDiv2);
-      scrollToBottom();
+      scrollToBottom(true);
       const codeStartedAt = Date.now();
       const codeTimerId = startLoadingTimer(loadingDiv2, codeStartedAt);
 
@@ -2747,10 +2931,17 @@ async function generateResponse() {
         }
         const reader = codeRes.body.getReader();
         const decoder = new TextDecoder();
+        let framePending = '';
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          fullContent += decoder.decode(value, { stream: true });
+          framePending += decoder.decode(value, { stream: true });
+          const { content, pending } = extractStatusFrames(framePending, (status) => {
+            updateLoadingLabel(loadingDiv2, status);
+          });
+          framePending = pending;
+          if (!content) continue;
+          fullContent += content;
           if (!streamBubble2) {
             loadingDiv2.remove();
             streamBubble2 = createStreamingBubble();
@@ -2780,6 +2971,7 @@ async function generateResponse() {
           message: userText,
           chat_id: chat?.id || null,
           messages: contextMessages,
+          attachments: (lastUser && lastUser.attachments) || [],
         }),
       });
       if (res.status === 401) { logout(); throw new Error('unauthorized'); }
@@ -2790,11 +2982,18 @@ async function generateResponse() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let streamBubble = null;
+      let framePending = '';
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          fullContent += decoder.decode(value, { stream: true });
+          framePending += decoder.decode(value, { stream: true });
+          const { content, pending } = extractStatusFrames(framePending, (status) => {
+            updateLoadingLabel(loadingDiv, status);
+          });
+          framePending = pending;
+          if (!content) continue;
+          fullContent += content;
           if (!streamBubble) {
             if (loadingDiv.parentNode) loadingDiv.remove();
             streamBubble = createStreamingBubble();
@@ -2999,7 +3198,16 @@ function promptRename(id) {
  * ════════════════════════════════════════════ */
 function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }
 function copyText(t) { navigator.clipboard.writeText(t); }
-function scrollToBottom() { const c = $('chat-container'); c.scrollTop = c.scrollHeight; }
+function scrollToBottom(force = false) {
+  const c = $('chat-container');
+  if (!c) return;
+  // 사용자가 위로 스크롤해서 읽고 있는 중이면 강제로 끌어내리지 않는다.
+  // (force=true 인 호출 — 새 메시지 전송 등 — 은 항상 바닥으로 이동)
+  const distance = c.scrollHeight - c.scrollTop - c.clientHeight;
+  if (force || distance < 120) {
+    c.scrollTop = c.scrollHeight;
+  }
+}
 function download(content, name, type) {
   const blob = new Blob([content], { type });
   const a = document.createElement('a');
@@ -3154,9 +3362,7 @@ function init() {
   renderMessages();
   updateModelChip();
 
-  // Auth wiring
-  $('login-form').addEventListener('submit', handleLogin);
-  $('signup-form').addEventListener('submit', handleSignup);
+  // Auth wiring — submit 는 폼의 인라인 onsubmit 에서 처리 (JS init 타이밍 무관하게 URL 유출 방지)
   $('logout-btn').onclick = logout;
   if (isLoggedIn()) { hideLogin(); loadStateFromServer(); } else showLogin();
 
@@ -3170,8 +3376,16 @@ function init() {
     chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + 'px';
     updateSendBtn();
   });
+  // 한글 IME 조합 상태를 직접 추적 (Safari 는 isComposing/keyCode=229 동작이 불안정)
+  let isComposingInput = false;
+  chatInput.addEventListener('compositionstart', () => { isComposingInput = true; });
+  chatInput.addEventListener('compositionend', () => { isComposingInput = false; });
   chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    // 조합 중 Enter 는 확정용 — 전송하지 않음
+    if (isComposingInput || e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    sendMessage();
   });
   sendBtn.onclick = sendMessage;
 

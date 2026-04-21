@@ -84,35 +84,48 @@ async def call_llm_with_image(
     model: str,
     system: str,
     user_text: str,
-    image_png_bytes: bytes,
+    image_png_bytes: bytes | list[bytes],
     api_key: str | None = None,
     temperature: float | None = None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Multimodal POST /v1/chat/completions with a single PNG image.
+    """Multimodal POST /v1/chat/completions with one or more PNG/JPEG images.
 
-    Uses the standard OpenAI content-array format:
-        [{"type": "text", "text": ...}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}]
+    ``image_png_bytes`` 는 ``bytes`` 또는 ``list[bytes]``. 여러 이미지가
+    주어지면 모두 OpenAI 표준 content-array 포맷의 image_url 항목으로 이어
+    붙여 하나의 user 메시지로 전송합니다.
 
     VLM (vision-enabled) 모델에서만 동작합니다. 서버가 지원하지 않으면
     400/422 가 반환될 수 있습니다 — 호출부에서 예외로 받아서 텍스트 전용
     폴백을 수행해야 합니다.
     """
-    b64 = base64.b64encode(image_png_bytes).decode("ascii")
-    data_url = f"data:image/png;base64,{b64}"
+    if isinstance(image_png_bytes, (bytes, bytearray)):
+        image_list = [bytes(image_png_bytes)]
+    else:
+        image_list = [bytes(img) for img in image_png_bytes if img]
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+    for img in image_list:
+        b64 = base64.b64encode(img).decode("ascii")
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        })
+
+    chat_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    if messages:
+        chat_messages.extend(
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)
+        )
+    chat_messages.append({"role": "user", "content": content})
 
     body: dict[str, Any] = {
         "model": model,
         "stream": False,
-        "messages": [
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            },
-        ],
+        "messages": chat_messages,
     }
     if temperature is not None:
         body["temperature"] = temperature

@@ -37,6 +37,22 @@ from . import (
     spec_storage,
     utils,
 )
+# ──────────────────────────────────────────────────────────────────────────
+# 진행-상태 프레임 프로토콜 (서버 → 프런트)
+#
+# 중간 진행 상황은 `\x01STATUS:<text>\x02` 형태의 인라인 프레임으로 전송한다.
+# 프런트는 이 프레임만 뽑아 로딩 버블 라벨을 갱신하고, 프레임이 아닌 바이트만
+# 실제 메시지 본문으로 누적한다. 즉, 최종 검토가 끝나기 전까지는 스트리밍
+# 버블이 뜨지 않고 "잘 생각하기" 로딩이 계속 유지된다.
+# ──────────────────────────────────────────────────────────────────────────
+_STATUS_BEGIN = "\x01"
+_STATUS_END = "\x02"
+
+
+def _status(text: str) -> str:
+    return f"{_STATUS_BEGIN}STATUS:{text}{_STATUS_END}"
+
+
 from .config import config_value
 from .prompts import (
     CHAT_SYSTEM_PROMPT,
@@ -125,7 +141,25 @@ class Pipeline:
     # ------------------------------------------------------------------
     # LLM helpers (bound to Valves)
     # ------------------------------------------------------------------
-    def _call(self, system: str, user: str, messages: list[dict[str, Any]] | None = None) -> str:
+    def _call(
+        self,
+        system: str,
+        user: str,
+        messages: list[dict[str, Any]] | None = None,
+        images: list[bytes] | None = None,
+    ) -> str:
+        if images:
+            return openai_client.run_async(
+                openai_client.call_llm_with_image(
+                    base_url=self.valves.base_url,
+                    model=self.valves.model,
+                    api_key=self.valves.api_key or None,
+                    system=system,
+                    user_text=user,
+                    image_png_bytes=images,
+                    messages=messages,
+                )
+            )
         return openai_client.run_async(
             openai_client.call_llm(
                 base_url=self.valves.base_url,
@@ -221,7 +255,10 @@ class Pipeline:
     # Chat reply (no spec/code stage)
     # ------------------------------------------------------------------
     def generate_chat_reply(
-        self, user_message: str, messages: list[dict[str, Any]] | None = None
+        self,
+        user_message: str,
+        messages: list[dict[str, Any]] | None = None,
+        images: list[bytes] | None = None,
     ) -> Generator[str, None, None]:
         missing = self._missing_config()
         if missing:
@@ -252,12 +289,23 @@ class Pipeline:
 
         try:
             effective_messages = None if external_block else messages
-            for tok in self._stream(
-                system=system_prompt,
-                user=effective_user,
-                messages=effective_messages,
-            ):
-                yield tok
+            if images:
+                # 이미지 첨부 시 멀티모달 (비스트리밍) → 전체 응답을 한 번에 yield
+                reply = self._call(
+                    system=system_prompt,
+                    user=effective_user,
+                    messages=effective_messages,
+                    images=images,
+                )
+                if reply:
+                    yield reply
+            else:
+                for tok in self._stream(
+                    system=system_prompt,
+                    user=effective_user,
+                    messages=effective_messages,
+                ):
+                    yield tok
         except Exception as exc:
             yield self._format_model_error("응답 생성", exc)
             return
@@ -269,11 +317,13 @@ class Pipeline:
         self,
         user_message: str,
         messages: list[dict[str, Any]] | None,
+        images: list[bytes] | None = None,
     ) -> dict[str, Any]:
         raw = self._call(
             system=SPEC_SYSTEM_PROMPT,
             user=user_message,
             messages=messages,
+            images=images,
         )
         spec = utils.parse_json(raw)
         utils.validate_spec(spec)
@@ -283,19 +333,16 @@ class Pipeline:
         self,
         spec: dict[str, Any],
         messages: list[dict[str, Any]] | None,
-    ) -> str:
+    ) -> Generator[str, None, None]:
         prompt = (
             "다음 기술 명세서를 기반으로 코드를 생성하세요:\n"
             f"{json.dumps(spec, ensure_ascii=False, indent=2)}"
         )
-        buf: list[str] = []
-        for tok in self._stream(
+        yield from self._stream(
             system=CODER_SYSTEM_PROMPT,
             user=prompt,
             messages=messages,
-        ):
-            buf.append(tok)
-        return "".join(buf)
+        )
 
     def _fix_code(
         self,
@@ -304,33 +351,38 @@ class Pipeline:
         issues: list[str],
         fix_instructions: str,
         messages: list[dict[str, Any]] | None,
-    ) -> str:
+    ) -> Generator[str, None, None]:
         prompt = FIX_USER_TEMPLATE.format(
             spec=json.dumps(spec, ensure_ascii=False, indent=2),
             code=previous_code,
             issues="\n".join(f"- {issue}" for issue in issues) or "(명시된 문제 없음)",
             fix_instructions=fix_instructions or "(지시 없음 — 검토 결과를 참고하여 수정)",
         )
-        buf: list[str] = []
-        for tok in self._stream(
+        yield from self._stream(
             system=FIX_CODER_SYSTEM_PROMPT,
             user=prompt,
             messages=messages,
-        ):
-            buf.append(tok)
-        return "".join(buf)
+        )
 
     def _parse_review_result(self, raw: str) -> dict[str, Any]:
+        # 기본은 '불합격'. 모델이 명시적으로 ok=true 를 주지 않으면 통과시키지 않음.
         try:
             parsed = utils.parse_json(raw)
         except ValueError:
-            # 파싱 실패 시 '통과' 로 간주 — 무한 루프 방지
-            return {"ok": True, "issues": [], "fix_instructions": "", "_raw": raw}
-        ok = bool(parsed.get("ok", True))
+            return {
+                "ok": False,
+                "issues": ["검토 결과 JSON 파싱 실패 — 판정 불가, 재생성 필요"],
+                "fix_instructions": "명세서의 모든 항목을 다시 점검하여 완전한 코드를 재생성하세요.",
+                "_raw": raw,
+            }
+        ok = parsed.get("ok")
+        ok = (ok is True)  # 문자열 "true" 나 누락은 False 로 취급
         issues = parsed.get("issues") or []
         if not isinstance(issues, list):
             issues = [str(issues)]
         fix_instructions = str(parsed.get("fix_instructions") or "")
+        if not ok and not issues:
+            issues = ["검토자가 문제를 명시하지 않았지만 ok=true 가 아니므로 불합격 처리"]
         return {
             "ok": ok,
             "issues": [str(x) for x in issues],
@@ -351,11 +403,18 @@ class Pipeline:
         spec: dict[str, Any],
         code: str,
         screenshot_png: bytes,
+        runtime_errors: list[str] | None = None,
     ) -> dict[str, Any]:
-        """스크린샷을 첨부한 멀티모달 검토."""
+        """스크린샷 + 런타임 로그를 첨부한 멀티모달 검토."""
+        runtime_log = (
+            "\n".join(f"- {err}" for err in runtime_errors)
+            if runtime_errors
+            else "(런타임 에러 없음)"
+        )
         prompt = VISUAL_REVIEW_USER_TEMPLATE.format(
             spec=json.dumps(spec, ensure_ascii=False, indent=2),
             code=code,
+            runtime_log=runtime_log,
         )
         raw = openai_client.run_async(
             openai_client.call_llm_with_image(
@@ -369,8 +428,8 @@ class Pipeline:
         )
         return self._parse_review_result(raw)
 
-    def _try_screenshot(self, code: str) -> bytes | None:
-        """생성 코드에서 파일 맵 추출 → 단일 HTML 병합 → 헤드리스 렌더 → PNG."""
+    def _try_screenshot(self, code: str) -> tuple[bytes, list[str]] | None:
+        """코드 → 단일 HTML 병합 → 헤드리스 렌더 → (PNG, 런타임 에러)."""
         if not self.valves.enable_visual_review:
             return None
         files = preview_builder.extract_code_blocks(code)
@@ -378,25 +437,32 @@ class Pipeline:
             return None
         merged = preview_builder.build_combined_html(files)
         if not merged:
-            return None  # HTML 엔트리가 없으면 시각 검토 대상 아님
-        return screenshot.render_html_screenshot(merged)
+            return None
+        return screenshot.render_html_with_diagnostics(merged)
 
     def _review_code(
         self,
         spec: dict[str, Any],
         code: str,
     ) -> tuple[dict[str, Any], str]:
-        """검토 실행. 가능하면 스크린샷 첨부 멀티모달, 아니면 텍스트.
-
-        반환: (review_dict, mode) — mode 는 'visual' | 'text' 로 UI 에 표시.
-        """
-        png = self._try_screenshot(code)
-        if png is not None:
+        """검토 실행. 가능하면 스크린샷 + 런타임 로그 첨부 멀티모달, 아니면 텍스트."""
+        shot = self._try_screenshot(code)
+        if shot is not None:
+            png, runtime_errors = shot
             try:
-                return self._review_code_visual(spec, code, png), "visual"
+                review = self._review_code_visual(spec, code, png, runtime_errors)
+                # 런타임 에러가 있는데 모델이 ok=true 로 판정하면 강제로 false 처리
+                if runtime_errors and review.get("ok"):
+                    review["ok"] = False
+                    review["issues"] = list(review.get("issues", [])) + [
+                        f"런타임: {err}" for err in runtime_errors
+                    ]
+                    review["fix_instructions"] = (
+                        (review.get("fix_instructions") or "")
+                        + "\n헤드리스 렌더 중 발생한 JS 에러/요청 실패를 제거하세요."
+                    ).strip()
+                return review, "visual"
             except Exception as exc:  # noqa: BLE001
-                # 서버가 image_url 을 안 받거나 기타 오류 → 텍스트 폴백
-                # (로그는 stdout 에 남기고, 검토 자체가 실패한 건 아니므로 계속)
                 import sys
                 print(
                     f"[visual review 실패, 텍스트로 폴백] {exc}", file=sys.stderr
@@ -407,6 +473,7 @@ class Pipeline:
         self,
         spec: dict[str, Any],
         messages: list[dict[str, Any]] | None,
+        prelude: str = "",
     ) -> Generator[str, None, None]:
         """코드 생성 → 검토 → (문제 있으면) 수정 → 재검토 루프.
 
@@ -422,58 +489,60 @@ class Pipeline:
         code = ""
         last_review: dict[str, Any] | None = None
         attempt = 0
+        final_note = ""
         while attempt < hard_cap:
             attempt += 1
             if attempt == 1:
-                yield "💻 코드 생성 중...\n\n"
-                try:
-                    code = self._generate_code(spec, messages=messages)
-                except Exception as exc:
-                    yield self._format_model_error("코드 생성", exc)
-                    return
+                base_label = f"코드 생성 중 (1/{cap_label})"
+                gen = self._generate_code(spec, messages=messages)
+                stage_label = "코드 생성"
             else:
-                yield (
-                    f"🔧 검토 결과를 반영해 코드 수정 중 "
-                    f"(시도 {attempt}/{cap_label})...\n\n"
+                base_label = f"코드 수정 중 ({attempt}/{cap_label})"
+                gen = self._fix_code(
+                    spec=spec,
+                    previous_code=code,
+                    issues=(last_review or {}).get("issues", []),
+                    fix_instructions=(last_review or {}).get("fix_instructions", ""),
+                    messages=messages,
                 )
-                try:
-                    code = self._fix_code(
-                        spec=spec,
-                        previous_code=code,
-                        issues=(last_review or {}).get("issues", []),
-                        fix_instructions=(last_review or {}).get("fix_instructions", ""),
-                        messages=messages,
-                    )
-                except Exception as exc:
-                    yield self._format_model_error("코드 수정", exc)
-                    return
+                stage_label = "코드 수정"
 
-            yield f"🔍 코드 검토 중 ({attempt}/{cap_label})...\n\n"
+            yield _status(base_label)
+            buf: list[str] = []
             try:
-                review, mode = self._review_code(spec, code)
+                for i, tok in enumerate(gen):
+                    buf.append(tok)
+                    # 긴 생성 동안에도 "살아 있음"을 알리기 위해 주기적으로 상태 갱신
+                    if (i + 1) % 40 == 0:
+                        chars = sum(len(p) for p in buf)
+                        yield _status(f"{base_label} — {chars:,}자 누적")
             except Exception as exc:
-                yield f"⚠️ 검토 단계 실패 — 현재 코드를 그대로 출력합니다: {exc}\n\n"
-                yield from utils.stream_text(code)
+                yield self._format_model_error(stage_label, exc)
                 return
+            code = "".join(buf)
 
-            mode_label = "🖼 시각 검토" if mode == "visual" else "📝 텍스트 검토"
+            yield _status(f"코드 검토 중 ({attempt}/{cap_label})")
+            try:
+                review, _mode = self._review_code(spec, code)
+            except Exception:
+                # 검토 실패 → 마지막 코드를 그대로 출력
+                final_note = "⚠️ 자동 검토 단계가 실패해 마지막 결과를 그대로 출력합니다.\n\n"
+                break
+
             if review["ok"]:
-                yield f"✅ {mode_label} 통과 ({attempt}/{cap_label})\n\n"
-                yield from utils.stream_text(code)
-                return
+                yield _status("✅ 검토 통과 — 결과 출력 중")
+                break
 
-            issues_text = "\n".join(f"- {x}" for x in review["issues"]) or "- (상세 없음)"
-            yield (
-                f"⚠️ {mode_label}에서 문제 발견 ({attempt}/{cap_label}):\n"
-                f"{issues_text}\n\n"
-            )
             last_review = review
+        else:
+            # while-else: hard_cap 도달 (break 없이 종료)
+            final_note = "⚠️ 최대 반복 횟수에 도달해 마지막 결과를 그대로 출력합니다.\n\n"
 
-        # 하드캡 도달 — 발산으로 판단하고 마지막 결과 출력
-        yield (
-            f"⚠️ 안전 한도({hard_cap}회)에 도달했습니다. "
-            "모델이 명세를 충족시키지 못한 것으로 보여 마지막 결과를 그대로 출력합니다.\n\n"
-        )
+        # ── 여기서부터가 "프런트가 스트리밍 버블로 전환하는" 첫 평문 바이트 ──
+        if prelude:
+            yield prelude
+        if final_note:
+            yield final_note
         yield from utils.stream_text(code)
 
     # ------------------------------------------------------------------
@@ -487,6 +556,7 @@ class Pipeline:
         body: dict[str, Any] | None = None,
         username: str = "anonymous",
         chat_id: str | None = None,
+        images: list[bytes] | None = None,
     ) -> Generator[str, None, None]:
         del model_id, body
 
@@ -501,13 +571,17 @@ class Pipeline:
         route = self._route_request(user_message)
 
         if route["intent"] == "chat":
-            yield from self.generate_chat_reply(user_message, messages=messages)
+            yield from self.generate_chat_reply(
+                user_message, messages=messages, images=images
+            )
             return
 
-        # 1) 명세서 작성
-        yield "📝 명세서 작성 중...\n\n"
+        # 1) 명세서 작성 — 로딩 상태만 전송
+        yield _status("명세서 작성 중")
         try:
-            spec = self._generate_spec_json(user_message, messages=messages)
+            spec = self._generate_spec_json(
+                user_message, messages=messages, images=images
+            )
         except ValueError as exc:
             yield f"요청 분석 결과를 처리하지 못했습니다: {exc}"
             return
@@ -515,6 +589,7 @@ class Pipeline:
             yield self._format_model_error("요청 분석", exc)
             return
 
+        saved_note = ""
         try:
             saved_path = spec_storage.save_spec(
                 username=username,
@@ -522,20 +597,25 @@ class Pipeline:
                 spec=spec,
                 user_message=user_message,
             )
-            yield (
+            saved_note = (
                 f"✅ 명세서 저장 완료: `specs/{saved_path.parent.name}/{saved_path.name}`\n\n"
             )
         except OSError as exc:
-            yield f"⚠️ 명세서 저장 실패(무시하고 계속 진행): {exc}\n\n"
+            saved_note = f"⚠️ 명세서 저장 실패(무시하고 계속 진행): {exc}\n\n"
 
         spec_preview = json.dumps(spec, ensure_ascii=False, indent=2)
-        yield (
-            "<details><summary>📋 생성된 명세서 (클릭하여 펼치기)</summary>\n\n"
+        spec_prelude = (
+            saved_note
+            + "<details><summary>📋 생성된 명세서 (클릭하여 펼치기)</summary>\n\n"
             f"```json\n{spec_preview}\n```\n\n</details>\n\n"
         )
 
         # 2) 코드 생성 → 3) 검토 → 4/5) 출력 or 수정 루프
-        yield from self._run_spec_code_review_loop(spec, messages=messages)
+        #    루프는 중간 과정 동안 STATUS 프레임만 흘리고, 최종 통과 후에
+        #    평문(= 프런트 스트리밍 전환 트리거)을 내보낸다.
+        yield from self._run_spec_code_review_loop(
+            spec, messages=messages, prelude=spec_prelude
+        )
 
     # ------------------------------------------------------------------
     # Public: two-stage (confirm) pipeline
@@ -546,13 +626,16 @@ class Pipeline:
         messages: list[dict[str, Any]] | None = None,
         username: str = "anonymous",
         chat_id: str | None = None,
+        images: list[bytes] | None = None,
     ) -> dict[str, Any]:
         missing = self._missing_config()
         if missing:
             raise RuntimeError("설정이 비어 있습니다: " + ", ".join(missing))
 
         try:
-            spec = self._generate_spec_json(user_message, messages=messages)
+            spec = self._generate_spec_json(
+                user_message, messages=messages, images=images
+            )
         except ValueError as exc:
             raise ValueError(f"명세서 파싱 실패: {exc}") from exc
 

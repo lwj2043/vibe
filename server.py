@@ -10,6 +10,7 @@ Run:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -375,20 +376,83 @@ class ChatPayload(BaseModel):
     message: str
     chat_id: str | None = None
     messages: list[dict[str, Any]] | None = None
+    attachments: list[dict[str, Any]] | None = None
+
+
+def _parse_attachments(
+    attachments: list[dict[str, Any]] | None,
+) -> tuple[list[bytes], str]:
+    """클라이언트가 보낸 attachments 배열을 (이미지 바이트 목록, 텍스트 컨텍스트) 로 분해.
+
+    - 이미지(image/*): 바이너리로 디코드해 images 로 돌려줌
+    - PDF(application/pdf): 텍스트 추출 시도 → context 에 '[파일: 이름]\\n...' 형식으로 누적
+    - 그 외: 무시
+    """
+    images: list[bytes] = []
+    text_parts: list[str] = []
+    if not attachments:
+        return images, ""
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        data = att.get("data") or ""
+        name = att.get("name") or "(이름 없음)"
+        mime = (att.get("type") or "").lower()
+        if not isinstance(data, str) or "," not in data:
+            continue
+        try:
+            raw = base64.b64decode(data.split(",", 1)[1])
+        except Exception:  # noqa: BLE001
+            continue
+        if mime.startswith("image/"):
+            images.append(raw)
+        elif mime == "application/pdf" or name.lower().endswith(".pdf"):
+            extracted = _extract_pdf_text(raw)
+            if extracted:
+                text_parts.append(f"[첨부 파일: {name}]\n{extracted}")
+    return images, ("\n\n".join(text_parts)).strip()
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """PDF 바이트에서 텍스트를 추출. 의존성이 없거나 실패하면 빈 문자열."""
+    try:
+        from pypdf import PdfReader
+        from io import BytesIO
+    except ImportError:
+        return ""
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+        pages = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception:  # noqa: BLE001
+                pages.append("")
+        text = "\n".join(pages).strip()
+        if len(text) > 20000:
+            text = text[:20000] + "\n… (이후 내용 생략)"
+        return text
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 @app.post("/api/chat")
 def chat(payload: ChatPayload, request: Request) -> StreamingResponse:
     """자동 모드: 명세 → 코드 전체 실행 (바로 진행)."""
     username = _require_session(request)
+    images, pdf_context = _parse_attachments(payload.attachments)
+    effective_message = (
+        f"{pdf_context}\n\n{payload.message}" if pdf_context else payload.message
+    )
 
     def stream():
         try:
             for chunk in pipeline.pipe(
-                user_message=payload.message,
+                user_message=effective_message,
                 messages=payload.messages,
                 username=username,
                 chat_id=payload.chat_id,
+                images=images or None,
             ):
                 if chunk:
                     yield chunk
@@ -406,27 +470,33 @@ def chat_generate_spec(payload: ChatPayload, request: Request) -> dict[str, Any]
     일반 질문이면 채팅 응답을 바로 생성해 반환 (`{"mode": "chat", "reply": "..."}`).
     """
     username = _require_session(request)
+    images, pdf_context = _parse_attachments(payload.attachments)
+    effective_message = (
+        f"{pdf_context}\n\n{payload.message}" if pdf_context else payload.message
+    )
 
     # 코딩 요청 여부 판정 — 아니면 명세 단계를 건너뛰고 바로 채팅 응답
     if not Pipeline._is_coding_request(payload.message):
         reply_chunks: list[str] = []
         try:
             for chunk in pipeline.generate_chat_reply(
-                payload.message,
+                effective_message,
                 messages=payload.messages,
+                images=images or None,
             ):
                 if chunk:
                     reply_chunks.append(chunk)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"mode": "chat", "reply": "".join(reply_chunks)}
- 
+
     try:
         spec = pipeline.generate_spec(
-            user_message=payload.message,
+            user_message=effective_message,
             messages=payload.messages,
             username=username,
             chat_id=payload.chat_id,
+            images=images or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
