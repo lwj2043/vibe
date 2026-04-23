@@ -26,6 +26,9 @@ def parse_json(text: str) -> dict[str, Any]:
         if match:
             stripped = match.group(1).strip()
 
+    # 모델이 자주 내보내는 invalid JSON escape 교정 (\' → ')
+    stripped = re.sub(r"\\'", "'", stripped)
+
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:

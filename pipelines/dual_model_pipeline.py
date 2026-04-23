@@ -23,6 +23,7 @@ Orchestration only; concrete logic lives in sibling modules:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Generator
 from typing import Any
 
@@ -47,6 +48,10 @@ from . import (
 # ──────────────────────────────────────────────────────────────────────────
 _STATUS_BEGIN = "\x01"
 _STATUS_END = "\x02"
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def _status(text: str) -> str:
@@ -325,8 +330,25 @@ class Pipeline:
             messages=messages,
             images=images,
         )
-        spec = utils.parse_json(raw)
-        utils.validate_spec(spec)
+        logger.info("[spec] raw response (%d chars):\n%s", len(raw), raw)
+        try:
+            spec = utils.parse_json(raw)
+        except ValueError as exc:
+            logger.error("[spec] parse_json failed: %s | raw preview=%r", exc, raw[:500])
+            raise
+        logger.info("[spec] parsed top-level keys: %s", sorted(spec.keys()))
+        try:
+            utils.validate_spec(spec)
+        except ValueError as exc:
+            logger.error(
+                "[spec] validate_spec failed: %s | actual keys=%s | spec preview=%s",
+                exc,
+                sorted(spec.keys()),
+                json.dumps(spec, ensure_ascii=False)[:500],
+            )
+            raise ValueError(
+                f"{exc} | 실제 키={sorted(spec.keys())} | 미리보기={json.dumps(spec, ensure_ascii=False)[:300]}"
+            ) from exc
         return spec
 
     def _generate_code(

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent
 USERS_PATH = ROOT / "users.json"
 CHAT_LOGS_DIR = ROOT / "chat_logs"
 CHAT_UI_PATH = ROOT / "chat_ui.html"
+MEMORY_DIR = ROOT / "user_memory"
 
 # Allow `from pipelines.dual_model_pipeline import Pipeline`
 sys.path.insert(0, str(ROOT))
@@ -115,7 +116,10 @@ def _require_session(request: Request) -> str:
 # ---------------------------------------------------------------------------
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(CHAT_UI_PATH)
+    return FileResponse(
+        CHAT_UI_PATH,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 class LoginPayload(BaseModel):
@@ -436,14 +440,93 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
         return ""
 
 
+# ---------------------------------------------------------------------------
+# User memory (persistent facts injected into every chat)
+# ---------------------------------------------------------------------------
+def _memory_path(username: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", (username or "anonymous").strip()).strip("._") or "anonymous"
+    MEMORY_DIR.mkdir(exist_ok=True)
+    return MEMORY_DIR / f"{safe}.json"
+
+
+# 메모리는 채팅 요청마다 읽히므로 mtime 기반 캐시로 디스크 I/O 를 줄인다.
+_MEMORY_CACHE: dict[str, tuple[float, list[str]]] = {}
+
+
+def _load_memory(username: str) -> list[str]:
+    path = _memory_path(username)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return []
+    cached = _MEMORY_CACHE.get(username)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        items = data.get("items", []) if isinstance(data, dict) else []
+        cleaned = [str(x).strip() for x in items if str(x).strip()]
+    except (json.JSONDecodeError, OSError):
+        cleaned = []
+    _MEMORY_CACHE[username] = (mtime, cleaned)
+    return cleaned
+
+
+def _save_memory(username: str, items: list[str]) -> None:
+    path = _memory_path(username)
+    path.write_text(
+        json.dumps({"items": items}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    try:
+        _MEMORY_CACHE[username] = (path.stat().st_mtime, list(items))
+    except OSError:
+        _MEMORY_CACHE.pop(username, None)
+
+
+def _memory_block(username: str) -> str:
+    items = _load_memory(username)
+    if not items:
+        return ""
+    body = "\n".join(f"- {x}" for x in items)
+    return f"[사용자가 기억해 두라고 한 사항]\n{body}"
+
+
+@app.get("/api/memory")
+def get_memory(request: Request) -> dict[str, Any]:
+    username = _require_session(request)
+    return {"items": _load_memory(username)}
+
+
+class MemoryPayload(BaseModel):
+    items: list[str]
+
+
+@app.put("/api/memory")
+def put_memory(payload: MemoryPayload, request: Request) -> dict[str, bool]:
+    username = _require_session(request)
+    cleaned = [str(x).strip() for x in payload.items if str(x).strip()][:50]
+    _save_memory(username, cleaned)
+    return {"ok": True}
+
+
+def _compose_effective_message(username: str, user_message: str, pdf_context: str) -> str:
+    parts: list[str] = []
+    mem = _memory_block(username)
+    if mem:
+        parts.append(mem)
+    if pdf_context:
+        parts.append(pdf_context)
+    parts.append(user_message)
+    return "\n\n".join(parts)
+
+
 @app.post("/api/chat")
 def chat(payload: ChatPayload, request: Request) -> StreamingResponse:
     """자동 모드: 명세 → 코드 전체 실행 (바로 진행)."""
     username = _require_session(request)
     images, pdf_context = _parse_attachments(payload.attachments)
-    effective_message = (
-        f"{pdf_context}\n\n{payload.message}" if pdf_context else payload.message
-    )
+    effective_message = _compose_effective_message(username, payload.message, pdf_context)
 
     def stream():
         try:
@@ -471,9 +554,7 @@ def chat_generate_spec(payload: ChatPayload, request: Request) -> dict[str, Any]
     """
     username = _require_session(request)
     images, pdf_context = _parse_attachments(payload.attachments)
-    effective_message = (
-        f"{pdf_context}\n\n{payload.message}" if pdf_context else payload.message
-    )
+    effective_message = _compose_effective_message(username, payload.message, pdf_context)
 
     # 코딩 요청 여부 판정 — 아니면 명세 단계를 건너뛰고 바로 채팅 응답
     if not Pipeline._is_coding_request(payload.message):
