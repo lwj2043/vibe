@@ -34,6 +34,7 @@ MEMORY_DIR = ROOT / "user_memory"
 # Allow `from pipelines.dual_model_pipeline import Pipeline`
 sys.path.insert(0, str(ROOT))
 from pipelines.dual_model_pipeline import Pipeline  # noqa: E402
+from pipelines.spec_storage import spec_dir as _spec_dir  # noqa: E402  # sanitized path helper
 
 app = FastAPI(title="Vibe Coding Service")
 pipeline = Pipeline()
@@ -638,26 +639,35 @@ SPECS_DIR = ROOT / "specs"
 def list_specs(request: Request) -> dict[str, Any]:
     """현재 로그인한 사용자의 저장된 명세서 목록을 반환합니다."""
     username = _require_session(request)
-    user_dir = SPECS_DIR / username
+    user_dir = _spec_dir(username)  # sanitize_path_component 적용된 경로
     if not user_dir.exists():
         return {"specs": []}
     specs: list[dict[str, Any]] = []
-    for path in sorted(user_dir.glob("*.json")):
+    # spec_storage 는 YYYYMMDD.jsonl (JSONL, 1줄=1레코드) 형식으로 저장
+    for path in sorted(user_dir.glob("*.jsonl")):
         try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
             continue
-        if not isinstance(record, dict):
-            continue
-        specs.append(
-            {
-                "file": path.name,
-                "chat_id": record.get("chat_id"),
-                "saved_at": record.get("saved_at"),
-                "user_message": record.get("user_message"),
-                "project": (record.get("spec") or {}).get("project"),
-            }
-        )
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            specs.append(
+                {
+                    "file": path.name,
+                    "chat_id": record.get("chat_id"),
+                    "saved_at": record.get("saved_at"),
+                    "user_message": record.get("user_message"),
+                    "project": (record.get("spec") or {}).get("project"),
+                }
+            )
     return {"specs": specs}
 
 

@@ -23,7 +23,6 @@ Orchestration only; concrete logic lives in sibling modules:
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Generator
 from typing import Any
 
@@ -62,29 +61,30 @@ from .config import config_value
 from .prompts import (
     CHAT_SYSTEM_PROMPT,
     CHAT_WITH_EXTERNAL_RULE,
-    CODER_SYSTEM_PROMPT,
+    CODER_SYSTEM_PROMPT_ZH,
     DIFF_CODER_PROMPT,
     DIFF_SPEC_PROMPT,
-    FIX_CODER_SYSTEM_PROMPT,
-    FIX_USER_TEMPLATE,
+    FIX_CODER_SYSTEM_PROMPT_ZH,
+    KO_TO_ZH_SYSTEM,
     REVIEW_SYSTEM_PROMPT,
     REVIEW_USER_TEMPLATE,
     ROUTER_SYSTEM_PROMPT,
     SPEC_SYSTEM_PROMPT,
     VISUAL_REVIEW_SYSTEM_PROMPT,
     VISUAL_REVIEW_USER_TEMPLATE,
+    ZH_TO_KO_CODE_SYSTEM,
 )
 
 
 class Pipeline:
-    """Single-VLM pipeline with spec → code → review → fix loop."""
+    """Dual-model pipeline: Gemma(spec·review) → Qwen(code) → Gemma(review) loop."""
 
     class Valves(BaseModel):
         model_config = ConfigDict(protected_namespaces=())
 
         model: str = Field(
             default=str(config_value("model", default="gemma-4-31b-it")),
-            description="VLM 모델명 (OpenAI 호환 API에 전달).",
+            description="명세·검수 모델명 (Gemma). OpenAI 호환 API에 전달.",
         )
         base_url: str = Field(
             default=str(
@@ -92,11 +92,21 @@ class Pipeline:
                     "base_url", "openai_base_url", default="http://192.168.100.13:8000/v1"
                 )
             ),
-            description="OpenAI 호환 API base URL. /v1 까지 포함합니다.",
+            description="명세·검수 모델 API base URL (Gemma). /v1 까지 포함합니다.",
+        )
+        coder_model: str = Field(
+            default=str(config_value("coder_model", default="Qwen3.6-35B-A3B-UD-Q4_k_s.gguf")),
+            description="코딩 담당 모델명 (Qwen). OpenAI 호환 API에 전달.",
+        )
+        coder_base_url: str = Field(
+            default=str(
+                config_value("coder_base_url", default="http://192.168.100.122:8080/v1")
+            ),
+            description="코딩 담당 모델 API base URL (Qwen). /v1 까지 포함합니다.",
         )
         api_key: str = Field(
             default=str(config_value("api_key", default="")),
-            description="API 키 (필요 없는 엔드포인트면 빈 문자열).",
+            description="API 키 — 두 엔드포인트 공용 (필요 없으면 빈 문자열).",
         )
         max_review_iterations: int = Field(
             default=int(config_value("max_review_iterations", default=0) or 0),
@@ -191,6 +201,45 @@ class Pipeline:
             messages=messages,
         )
 
+    # Coder model (Qwen / llama.cpp) helpers
+    def _call_coder(self, system: str, user: str) -> str:
+        return openai_client.run_async(
+            openai_client.call_llm(
+                base_url=self.valves.coder_base_url,
+                model=self.valves.coder_model,
+                api_key=self.valves.api_key or None,
+                system=system,
+                user=f"/no_think\n{user}",  # Qwen3 thinking 모드 비활성화
+            )
+        )
+
+    def _stream_coder(
+        self,
+        system: str,
+        user: str,
+    ) -> Generator[str, None, None]:
+        yield from openai_client.stream_llm_sync(
+            base_url=self.valves.coder_base_url,
+            model=self.valves.coder_model,
+            api_key=self.valves.api_key or None,
+            system=system,
+            user=f"/no_think\n{user}",  # Qwen3 thinking 모드 비활성화
+        )
+
+    @staticmethod
+    def _strip_thinking(text: str) -> str:
+        """Qwen3 thinking 출력 제거: <think>...</think> 블록 및 잔여 태그."""
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    # Translation helpers (Gemma)
+    def _translate_for_coder(self, text: str) -> str:
+        """Gemma로 한국어 텍스트를 중국어로 번역 후 Qwen에 전달."""
+        return self._call(system=KO_TO_ZH_SYSTEM, user=text)
+
+    def _translate_to_korean(self, text: str) -> str:
+        """Gemma로 Qwen 출력의 중국어 부분을 한국어로 번역 (코드 보존)."""
+        return self._call(system=ZH_TO_KO_CODE_SYSTEM, user=text)
+
     # ------------------------------------------------------------------
     # Routing
     # ------------------------------------------------------------------
@@ -250,6 +299,8 @@ class Pipeline:
         required = {
             "model": self.valves.model,
             "base_url": self.valves.base_url,
+            "coder_model": self.valves.coder_model,
+            "coder_base_url": self.valves.coder_base_url,
         }
         return [name for name, value in required.items() if not str(value).strip()]
 
@@ -356,15 +407,13 @@ class Pipeline:
         spec: dict[str, Any],
         messages: list[dict[str, Any]] | None,
     ) -> Generator[str, None, None]:
-        prompt = (
+        del messages  # coder model은 history 미지원
+        ko_prompt = (
             "다음 기술 명세서를 기반으로 코드를 생성하세요:\n"
             f"{json.dumps(spec, ensure_ascii=False, indent=2)}"
         )
-        yield from self._stream(
-            system=CODER_SYSTEM_PROMPT,
-            user=prompt,
-            messages=messages,
-        )
+        zh_prompt = self._translate_for_coder(ko_prompt)
+        yield from self._stream_coder(system=CODER_SYSTEM_PROMPT_ZH, user=zh_prompt)
 
     def _fix_code(
         self,
@@ -376,32 +425,12 @@ class Pipeline:
         screenshot_png: bytes | None = None,
         runtime_errors: list[str] | None = None,
     ) -> Generator[str, None, None]:
-        runtime_log = (
-            "\n".join(f"- {err}" for err in runtime_errors)
-            if runtime_errors
-            else "(런타임 에러 없음)"
-        )
         prompt = FIX_USER_TEMPLATE.format(
             spec=json.dumps(spec, ensure_ascii=False, indent=2),
             code=previous_code,
             issues="\n".join(f"- {issue}" for issue in issues) or "(명시된 문제 없음)",
             fix_instructions=fix_instructions or "(지시 없음 — 검토 결과를 참고하여 수정)",
-            runtime_log=runtime_log,
         )
-        if screenshot_png:
-            try:
-                yield from openai_client.stream_llm_with_image_sync(
-                    base_url=self.valves.base_url,
-                    model=self.valves.model,
-                    api_key=self.valves.api_key or None,
-                    system=FIX_CODER_SYSTEM_PROMPT,
-                    user_text=prompt,
-                    image_png_bytes=screenshot_png,
-                    messages=messages,
-                )
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("multimodal fix 스트리밍 실패, 텍스트 폴백: %s", exc)
         yield from self._stream(
             system=FIX_CODER_SYSTEM_PROMPT,
             user=prompt,
@@ -533,34 +562,35 @@ class Pipeline:
         messages: list[dict[str, Any]] | None,
         prelude: str = "",
     ) -> Generator[str, None, None]:
-        """코드 생성 → 검토 → (문제 있으면) 수정 → 재검토 루프.
+        """Qwen 코드 생성 → Gemma 검수 → (미통과 시 Qwen 수정) 루프.
 
-        - ``max_review_iterations`` 가 0 이면 명세/디자인을 충족할 때까지 반복.
-        - ``review_safety_cap`` 으로 하드 상한을 두어 발산 시 강제 종료.
-        - 사용자에게는 진행 상황만 짧게 흘려보내고, 최종 통과한 코드만 본문으로 출력한다.
+        루프 내부는 중국어 코드 그대로 순환한다.
+        Gemma 검수 통과 or 캡 도달 후 마지막 코드를 한국어로 번역해 출력한다.
         """
         user_cap = int(self.valves.max_review_iterations or 0)
         safety = max(1, int(self.valves.review_safety_cap or 50))
         hard_cap = min(user_cap, safety) if user_cap > 0 else safety
         cap_label = str(user_cap) if user_cap > 0 else "∞"
 
-        code = ""
+        code_zh = ""   # Qwen 출력 (중국어) — 다음 수정 시 Qwen에 전달
+        code_ko = ""   # 번역 결과 (한국어) — Gemma 검수 및 최종 출력용
         last_review: dict[str, Any] | None = None
         last_screenshot: bytes | None = None
         last_runtime_errors: list[str] | None = None
         attempt = 0
+        final_note = ""
         while attempt < hard_cap:
             attempt += 1
             if attempt == 1:
-                base_label = f"코드 생성 중 (1/{cap_label})"
+                base_label = f"코드 생성 중 (1/{cap_label}) — Qwen"
                 gen = self._generate_code(spec, messages=messages)
                 stage_label = "코드 생성"
             else:
-                base_label = f"코드 수정 중 ({attempt}/{cap_label})"
+                base_label = f"코드 수정 중 ({attempt}/{cap_label}) — Qwen"
                 gen = self._fix_code(
                     spec=spec,
                     previous_code=code,
-                    issues=(last_review or {}).get("blocking_issues", []),
+                    issues=(last_review or {}).get("issues", []),
                     fix_instructions=(last_review or {}).get("fix_instructions", ""),
                     messages=messages,
                     screenshot_png=last_screenshot,
@@ -573,37 +603,45 @@ class Pipeline:
             try:
                 for i, tok in enumerate(gen):
                     buf.append(tok)
-                    # 긴 생성 동안에도 "살아 있음"을 알리기 위해 주기적으로 상태 갱신
                     if (i + 1) % 40 == 0:
                         chars = sum(len(p) for p in buf)
                         yield _status(f"{base_label} — {chars:,}자 누적")
             except Exception as exc:
                 yield self._format_model_error(stage_label, exc)
                 return
-            code = "".join(buf)
+            code_zh = self._strip_thinking("".join(buf))
 
-            yield _status(f"코드 검토 중 ({attempt}/{cap_label})")
+            # 검수 전 번역 — Gemma가 한국어로 검수해야 정확
+            yield _status(f"번역 중 ({attempt}/{cap_label}) — Gemma")
             try:
-                review, _mode, png, runtime_errors = self._review_code(spec, code)
-            except Exception as exc:
-                # 검토 실패 → 마지막 코드를 그대로 출력 (사용자에게는 내색하지 않음)
-                logger.warning("자동 검토 단계 실패, 마지막 코드 그대로 출력: %s", exc)
+                code_ko = self._translate_to_korean(code_zh)
+            except Exception:
+                code_ko = code_zh  # 번역 실패 시 원문으로 폴백
+
+            yield _status(f"검수 중 ({attempt}/{cap_label}) — Gemma")
+            try:
+                review, _mode = self._review_code(spec, code)
+            except Exception:
+                # 검토 실패 → 마지막 코드를 그대로 출력
+                final_note = "⚠️ 자동 검토 단계가 실패해 마지막 결과를 그대로 출력합니다.\n\n"
                 break
 
             if review["ok"]:
-                yield _status("✅ 검토 통과 — 결과 출력 중")
+                yield _status("✅ 검수 통과 — 출력 중")
                 break
 
             last_review = review
             last_screenshot = png
             last_runtime_errors = runtime_errors
         else:
-            # while-else: hard_cap 도달 — 사용자에게는 표시하지 않고 로그로만 남김
-            logger.info("최대 반복 횟수(%d)에 도달, 마지막 결과를 그대로 출력", hard_cap)
+            # while-else: hard_cap 도달 (break 없이 종료)
+            final_note = "⚠️ 최대 반복 횟수에 도달해 마지막 결과를 그대로 출력합니다.\n\n"
 
-        # ── 여기서부터가 "프런트가 스트리밍 버블로 전환하는" 첫 평문 바이트 ──
+        # ── 여기서부터 평문 출력 (프런트 스트리밍 전환) ──
         if prelude:
             yield prelude
+        if final_note:
+            yield final_note
         yield from utils.stream_text(code)
 
     # ------------------------------------------------------------------
@@ -728,7 +766,6 @@ class Pipeline:
             yield f"⚠️ 명세서 검증 실패: {exc}"
             return
 
-        # 확인 후 진행 모드에서도 동일한 코드→검토→수정 루프 적용
         yield from self._run_spec_code_review_loop(spec, messages=messages)
 
     # ------------------------------------------------------------------

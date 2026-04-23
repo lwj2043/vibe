@@ -55,7 +55,7 @@ def is_simple_question(user_message: str) -> bool:
             return False
     if "```" in user_message:
         return False
-    if msg.endswith("?") or msg.endswith("?"):
+    if msg.endswith("?") or msg.endswith("？"):  # 영문/전각 물음표
         return True
     for phrase in SIMPLE_QUESTION_PATTERNS:
         if phrase in msg:
