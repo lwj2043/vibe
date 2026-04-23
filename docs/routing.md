@@ -159,4 +159,3 @@ chat_logs/
 
 - `_require_session(request)` ([server.py:106-111](server.py#L106-L111)): `Authorization: Bearer <token>` 파싱 후 `SESSIONS`에서 username 조회. 실패 시 401.
 - `SESSIONS`는 in-memory 딕셔너리이므로 **서버 재시작 시 모든 토큰 무효화**.
-UPD
