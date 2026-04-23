@@ -373,13 +373,35 @@ class Pipeline:
         issues: list[str],
         fix_instructions: str,
         messages: list[dict[str, Any]] | None,
+        screenshot_png: bytes | None = None,
+        runtime_errors: list[str] | None = None,
     ) -> Generator[str, None, None]:
+        runtime_log = (
+            "\n".join(f"- {err}" for err in runtime_errors)
+            if runtime_errors
+            else "(런타임 에러 없음)"
+        )
         prompt = FIX_USER_TEMPLATE.format(
             spec=json.dumps(spec, ensure_ascii=False, indent=2),
             code=previous_code,
             issues="\n".join(f"- {issue}" for issue in issues) or "(명시된 문제 없음)",
             fix_instructions=fix_instructions or "(지시 없음 — 검토 결과를 참고하여 수정)",
+            runtime_log=runtime_log,
         )
+        if screenshot_png:
+            try:
+                yield from openai_client.stream_llm_with_image_sync(
+                    base_url=self.valves.base_url,
+                    model=self.valves.model,
+                    api_key=self.valves.api_key or None,
+                    system=FIX_CODER_SYSTEM_PROMPT,
+                    user_text=prompt,
+                    image_png_bytes=screenshot_png,
+                    messages=messages,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("multimodal fix 스트리밍 실패, 텍스트 폴백: %s", exc)
         yield from self._stream(
             system=FIX_CODER_SYSTEM_PROMPT,
             user=prompt,
@@ -393,21 +415,35 @@ class Pipeline:
         except ValueError:
             return {
                 "ok": False,
-                "issues": ["검토 결과 JSON 파싱 실패 — 판정 불가, 재생성 필요"],
+                "blocking_issues": ["검토 결과 JSON 파싱 실패 — 판정 불가, 재생성 필요"],
+                "minor_issues": [],
                 "fix_instructions": "명세서의 모든 항목을 다시 점검하여 완전한 코드를 재생성하세요.",
                 "_raw": raw,
             }
         ok = parsed.get("ok")
-        ok = (ok is True)  # 문자열 "true" 나 누락은 False 로 취급
-        issues = parsed.get("issues") or []
-        if not isinstance(issues, list):
-            issues = [str(issues)]
+        ok = (ok is True)
+
+        def _as_str_list(value: Any) -> list[str]:
+            if not value:
+                return []
+            if not isinstance(value, list):
+                value = [value]
+            return [str(x) for x in value if str(x).strip()]
+
+        blocking = _as_str_list(parsed.get("blocking_issues"))
+        minor = _as_str_list(parsed.get("minor_issues"))
+        # 구버전 스키마(issues) 폴백: 분리가 없으면 전부 blocking 으로 간주 (보수적).
+        legacy = _as_str_list(parsed.get("issues"))
+        if not blocking and not minor and legacy:
+            blocking = legacy
+
         fix_instructions = str(parsed.get("fix_instructions") or "")
-        if not ok and not issues:
-            issues = ["검토자가 문제를 명시하지 않았지만 ok=true 가 아니므로 불합격 처리"]
+        if not ok and not blocking:
+            blocking = ["검토자가 블로킹 문제를 명시하지 않았지만 ok=true 가 아니므로 불합격 처리"]
         return {
             "ok": ok,
-            "issues": [str(x) for x in issues],
+            "blocking_issues": blocking,
+            "minor_issues": minor,
             "fix_instructions": fix_instructions,
         }
 
@@ -466,8 +502,11 @@ class Pipeline:
         self,
         spec: dict[str, Any],
         code: str,
-    ) -> tuple[dict[str, Any], str]:
-        """검토 실행. 가능하면 스크린샷 + 런타임 로그 첨부 멀티모달, 아니면 텍스트."""
+    ) -> tuple[dict[str, Any], str, bytes | None, list[str] | None]:
+        """검토 실행. 가능하면 스크린샷 + 런타임 로그 첨부 멀티모달, 아니면 텍스트.
+
+        반환: (review, mode, screenshot_png_or_None, runtime_errors_or_None)
+        """
         shot = self._try_screenshot(code)
         if shot is not None:
             png, runtime_errors = shot
@@ -476,20 +515,17 @@ class Pipeline:
                 # 런타임 에러가 있는데 모델이 ok=true 로 판정하면 강제로 false 처리
                 if runtime_errors and review.get("ok"):
                     review["ok"] = False
-                    review["issues"] = list(review.get("issues", [])) + [
+                    review["blocking_issues"] = list(review.get("blocking_issues", [])) + [
                         f"런타임: {err}" for err in runtime_errors
                     ]
                     review["fix_instructions"] = (
                         (review.get("fix_instructions") or "")
                         + "\n헤드리스 렌더 중 발생한 JS 에러/요청 실패를 제거하세요."
                     ).strip()
-                return review, "visual"
+                return review, "visual", png, runtime_errors
             except Exception as exc:  # noqa: BLE001
-                import sys
-                print(
-                    f"[visual review 실패, 텍스트로 폴백] {exc}", file=sys.stderr
-                )
-        return self._review_code_text(spec, code), "text"
+                logger.warning("visual review 실패, 텍스트로 폴백: %s", exc)
+        return self._review_code_text(spec, code), "text", None, None
 
     def _run_spec_code_review_loop(
         self,
@@ -510,8 +546,9 @@ class Pipeline:
 
         code = ""
         last_review: dict[str, Any] | None = None
+        last_screenshot: bytes | None = None
+        last_runtime_errors: list[str] | None = None
         attempt = 0
-        final_note = ""
         while attempt < hard_cap:
             attempt += 1
             if attempt == 1:
@@ -523,9 +560,11 @@ class Pipeline:
                 gen = self._fix_code(
                     spec=spec,
                     previous_code=code,
-                    issues=(last_review or {}).get("issues", []),
+                    issues=(last_review or {}).get("blocking_issues", []),
                     fix_instructions=(last_review or {}).get("fix_instructions", ""),
                     messages=messages,
+                    screenshot_png=last_screenshot,
+                    runtime_errors=last_runtime_errors,
                 )
                 stage_label = "코드 수정"
 
@@ -545,10 +584,10 @@ class Pipeline:
 
             yield _status(f"코드 검토 중 ({attempt}/{cap_label})")
             try:
-                review, _mode = self._review_code(spec, code)
-            except Exception:
-                # 검토 실패 → 마지막 코드를 그대로 출력
-                final_note = "⚠️ 자동 검토 단계가 실패해 마지막 결과를 그대로 출력합니다.\n\n"
+                review, _mode, png, runtime_errors = self._review_code(spec, code)
+            except Exception as exc:
+                # 검토 실패 → 마지막 코드를 그대로 출력 (사용자에게는 내색하지 않음)
+                logger.warning("자동 검토 단계 실패, 마지막 코드 그대로 출력: %s", exc)
                 break
 
             if review["ok"]:
@@ -556,15 +595,15 @@ class Pipeline:
                 break
 
             last_review = review
+            last_screenshot = png
+            last_runtime_errors = runtime_errors
         else:
-            # while-else: hard_cap 도달 (break 없이 종료)
-            final_note = "⚠️ 최대 반복 횟수에 도달해 마지막 결과를 그대로 출력합니다.\n\n"
+            # while-else: hard_cap 도달 — 사용자에게는 표시하지 않고 로그로만 남김
+            logger.info("최대 반복 횟수(%d)에 도달, 마지막 결과를 그대로 출력", hard_cap)
 
         # ── 여기서부터가 "프런트가 스트리밍 버블로 전환하는" 첫 평문 바이트 ──
         if prelude:
             yield prelude
-        if final_note:
-            yield final_note
         yield from utils.stream_text(code)
 
     # ------------------------------------------------------------------

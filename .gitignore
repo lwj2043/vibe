@@ -1,21 +1,27 @@
+# Python
 __pycache__/
 *.py[cod]
+
+# Claude / IDE
 .claude/
+
+# Local config & secrets
 config.json
 pipelines/config.json
-generated_projects/*
-!generated_projects/.gitkeep
-pipelines/__init__/
-pipelines/dual_model_pipeline/
-pipelines/failed/
-user.json
 users.json
+
+# Per-user runtime data
 chat_logs/*
 !chat_logs/.gitkeep
 specs/*
 !specs/.gitkeep
+user_memory/*
+!user_memory/.gitkeep
+
+# Logs
 server.err.log
 server.out.log
 server.log
-test.py
-!chat_logs
+
+# Tests (로컬 전용 스크립트)
+tests/

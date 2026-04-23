@@ -145,6 +145,106 @@ async def call_llm_with_image(
         raise RuntimeError(f"Unexpected LLM response: {payload}") from exc
 
 
+def stream_llm_with_image_sync(
+    base_url: str,
+    model: str,
+    system: str,
+    user_text: str,
+    image_png_bytes: bytes | list[bytes],
+    messages: list[dict[str, Any]] | None = None,
+    api_key: str | None = None,
+    temperature: float | None = None,
+) -> Generator[str, None, None]:
+    """Stream SSE chunks from a multimodal /v1/chat/completions call (text + image).
+
+    VLM 미지원 서버에서는 400/422 가 나올 수 있음 — 호출부에서 예외를 받아
+    텍스트 전용 경로로 폴백하세요.
+    """
+    if isinstance(image_png_bytes, (bytes, bytearray)):
+        image_list = [bytes(image_png_bytes)]
+    else:
+        image_list = [bytes(img) for img in image_png_bytes if img]
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+    for img in image_list:
+        b64 = base64.b64encode(img).decode("ascii")
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        })
+
+    chat_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    if messages:
+        chat_messages.extend(
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)
+        )
+    chat_messages.append({"role": "user", "content": content})
+
+    body: dict[str, Any] = {
+        "model": model,
+        "stream": True,
+        "messages": chat_messages,
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
+
+    q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=64)
+    url = f"{base_url.rstrip('/')}/chat/completions"
+
+    async def _producer() -> None:
+        try:
+            async with httpx.AsyncClient(timeout=600) as client:
+                async with client.stream(
+                    "POST", url, json=body, headers=_headers(api_key)
+                ) as resp:
+                    resp.raise_for_status()
+                    async for raw_line in resp.aiter_lines():
+                        if not raw_line:
+                            continue
+                        line = raw_line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        try:
+                            delta = data["choices"][0].get("delta") or {}
+                        except (KeyError, IndexError, TypeError):
+                            continue
+                        chunk = delta.get("content") or ""
+                        if chunk:
+                            q.put(("chunk", chunk))
+        except Exception as exc:  # noqa: BLE001
+            q.put(("error", exc))
+        finally:
+            q.put(("done", None))
+
+    def _run_loop() -> None:
+        try:
+            asyncio.run(_producer())
+        except Exception as exc:  # noqa: BLE001
+            q.put(("error", exc))
+            q.put(("done", None))
+
+    t = threading.Thread(target=_run_loop, daemon=True)
+    t.start()
+    while True:
+        kind, value = q.get()
+        if kind == "chunk":
+            yield value
+        elif kind == "error":
+            raise value  # type: ignore[misc]
+        else:
+            break
+
+
 def stream_llm_sync(
     base_url: str,
     model: str,
