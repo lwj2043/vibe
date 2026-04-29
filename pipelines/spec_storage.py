@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .config import SPECS_ROOT
 from .utils import now_iso, sanitize_path_component
+
+logger = logging.getLogger(__name__)
+
+# 보존 기간(일). 이보다 오래된 spec dayfile 은 save 시 정리한다.
+SPEC_RETENTION_DAYS = 90
 
 # specs/{username}/YYYYMMDD.jsonl
 _SPEC_DAYFILE_RE = re.compile(r"^\d{8}\.jsonl$")
@@ -108,6 +114,33 @@ def _find_chat_in_dayfiles(
     return None
 
 
+def _prune_old_dayfiles(d: Path, retention_days: int = SPEC_RETENTION_DAYS) -> None:
+    """retention_days 보다 오래된 YYYYMMDD.jsonl 파일을 삭제한다.
+
+    파일명의 날짜를 기준으로 판정하므로 mtime 변화에 영향을 받지 않는다.
+    """
+    if retention_days <= 0:
+        return
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y%m%d")
+    for f in d.glob("*.jsonl"):
+        if not _SPEC_DAYFILE_RE.match(f.name):
+            continue
+        if f.stem < cutoff:
+            try:
+                f.unlink()
+            except OSError as exc:
+                logger.warning("spec dayfile 삭제 실패: %s (%s)", f, exc)
+
+
+def _spec_signature(record: dict[str, Any]) -> tuple[str, str, str]:
+    """중복 판정용 키 — saved_at 은 제외하고 내용만 본다."""
+    return (
+        str(record.get("chat_id") or ""),
+        str(record.get("user_message") or ""),
+        json.dumps(record.get("spec") or {}, sort_keys=True, ensure_ascii=False),
+    )
+
+
 def save_spec(
     username: str,
     chat_id: str | None,
@@ -124,6 +157,18 @@ def save_spec(
 
     path = spec_dayfile(username)
     recs = _read_jsonl(path)
+
+    # 직전 레코드와 내용이 같으면 append 하지 않는다(saved_at 제외 비교).
+    new_sig = _spec_signature(record)
+    if recs and _spec_signature(recs[-1]) == new_sig:
+        # latest.json 만 갱신(타임스탬프 표시는 최신화)
+        (d / "latest.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _prune_old_dayfiles(d)
+        return path
+
     recs.append(record)
     _write_jsonl(path, recs)
 
@@ -132,6 +177,9 @@ def save_spec(
         json.dumps(record, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    # 보존 기간 초과 파일 정리(저장과 함께 lazily 수행)
+    _prune_old_dayfiles(d)
     return path
 
 

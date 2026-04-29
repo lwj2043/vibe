@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import queue
 import threading
 from collections.abc import Generator
@@ -13,6 +14,51 @@ from typing import Any
 import httpx
 
 from .history import build_model_messages
+
+logger = logging.getLogger(__name__)
+
+# 재시도 설정 — 일시적 네트워크/서버 오류만 재시도한다.
+_RETRYABLE_STATUS = {429, 502, 503, 504}
+_MAX_RETRIES = 2  # 즉, 총 시도 = 1 + 2 = 3 회
+_BACKOFF_BASE_SEC = 1.0
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """일시적(재시도 가치 있는) 오류인지 판정."""
+    if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS
+    return False
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    json_body: dict[str, Any],
+    headers: dict[str, str],
+) -> httpx.Response:
+    """일시적 오류에 대해 지수 백오프로 재시도한다."""
+    last_exc: BaseException | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            response = await client.post(url, json=json_body, headers=headers)
+            response.raise_for_status()
+            return response
+        except (httpx.HTTPStatusError, httpx.HTTPError) as exc:
+            last_exc = exc
+            if attempt >= _MAX_RETRIES or not _is_transient(exc):
+                raise
+            delay = _BACKOFF_BASE_SEC * (2 ** attempt)
+            logger.warning(
+                "LLM 호출 일시 오류 — %.1fs 후 재시도 (%d/%d): %s",
+                delay, attempt + 1, _MAX_RETRIES, exc,
+            )
+            await asyncio.sleep(delay)
+    # 도달 불가 — 위에서 raise 됨
+    assert last_exc is not None
+    raise last_exc
 
 
 def run_async(coro: Any) -> Any:
@@ -65,12 +111,12 @@ async def call_llm(
         body["temperature"] = temperature
 
     async with httpx.AsyncClient(timeout=600) as client:
-        response = await client.post(
+        response = await _post_with_retry(
+            client,
             f"{base_url.rstrip('/')}/chat/completions",
-            json=body,
+            json_body=body,
             headers=_headers(api_key),
         )
-        response.raise_for_status()
         payload = response.json()
 
     try:
@@ -131,12 +177,12 @@ async def call_llm_with_image(
         body["temperature"] = temperature
 
     async with httpx.AsyncClient(timeout=600) as client:
-        response = await client.post(
+        response = await _post_with_retry(
+            client,
             f"{base_url.rstrip('/')}/chat/completions",
-            json=body,
+            json_body=body,
             headers=_headers(api_key),
         )
-        response.raise_for_status()
         payload = response.json()
 
     try:

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Generator
 from typing import Any
 
@@ -65,7 +66,9 @@ from .prompts import (
     CODER_SYSTEM_PROMPT_ZH,
     DIFF_CODER_PROMPT,
     DIFF_SPEC_PROMPT,
+    FIX_CODER_SYSTEM_PROMPT,
     FIX_CODER_SYSTEM_PROMPT_ZH,
+    FIX_USER_TEMPLATE,
     KO_TO_ZH_SYSTEM,
     REVIEW_SYSTEM_PROMPT,
     REVIEW_USER_TEMPLATE,
@@ -192,7 +195,23 @@ class Pipeline:
         system: str,
         user: str,
         messages: list[dict[str, Any]] | None = None,
+        *,
+        coder: bool = False,
     ) -> Generator[str, None, None]:
+        """LLM streaming. ``coder=True`` 면 Qwen 코더 모델로 라우팅한다.
+
+        coder 모드에서는 messages 인자가 무시되고 ``/no_think`` 프리픽스가
+        붙어 Qwen3 thinking 모드를 비활성화한다.
+        """
+        if coder:
+            yield from openai_client.stream_llm_sync(
+                base_url=self.valves.coder_base_url,
+                model=self.valves.coder_model,
+                api_key=self.valves.api_key or None,
+                system=system,
+                user=f"/no_think\n{user}",
+            )
+            return
         yield from openai_client.stream_llm_sync(
             base_url=self.valves.base_url,
             model=self.valves.model,
@@ -200,31 +219,6 @@ class Pipeline:
             system=system,
             user=user,
             messages=messages,
-        )
-
-    # Coder model (Qwen / llama.cpp) helpers
-    def _call_coder(self, system: str, user: str) -> str:
-        return openai_client.run_async(
-            openai_client.call_llm(
-                base_url=self.valves.coder_base_url,
-                model=self.valves.coder_model,
-                api_key=self.valves.api_key or None,
-                system=system,
-                user=f"/no_think\n{user}",  # Qwen3 thinking 모드 비활성화
-            )
-        )
-
-    def _stream_coder(
-        self,
-        system: str,
-        user: str,
-    ) -> Generator[str, None, None]:
-        yield from openai_client.stream_llm_sync(
-            base_url=self.valves.coder_base_url,
-            model=self.valves.coder_model,
-            api_key=self.valves.api_key or None,
-            system=system,
-            user=f"/no_think\n{user}",  # Qwen3 thinking 모드 비활성화
         )
 
     @staticmethod
@@ -414,7 +408,7 @@ class Pipeline:
             f"{json.dumps(spec, ensure_ascii=False, indent=2)}"
         )
         zh_prompt = self._translate_for_coder(ko_prompt)
-        yield from self._stream_coder(system=CODER_SYSTEM_PROMPT_ZH, user=zh_prompt)
+        yield from self._stream(system=CODER_SYSTEM_PROMPT_ZH, user=zh_prompt, coder=True)
 
     def _fix_code(
         self,
