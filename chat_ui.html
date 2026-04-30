@@ -34,6 +34,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <!-- Mermaid (다이어그램) -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<!-- Monaco Editor loader (코드 IDE 미리보기) -->
 </head>
 <body>
 
@@ -197,19 +198,34 @@
 
 <!-- ════════ Preview Panel ════════ -->
 <div id="preview-panel">
+  <div class="preview-panel-resizer" id="preview-panel-resizer" role="separator" aria-orientation="vertical" title="패널 폭 조절"></div>
   <div class="preview-header">
     <div class="preview-tabs">
-      <button class="preview-tab active" data-tab="preview" onclick="switchPreviewTab('preview')">미리보기</button>
-      <button class="preview-tab" data-tab="code" onclick="switchPreviewTab('code')">코드</button>
+      <button class="preview-tab active" data-tab="preview" onclick="switchPreviewTab('preview')">코드 + 실행</button>
+      <button class="preview-tab is-hidden" id="show-run-btn" onclick="showRunPane()" title="실행 패널 다시 열기" aria-label="실행 패널 다시 열기">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        실행
+      </button>
     </div>
-    <button class="icon-btn" onclick="closePreview()" title="닫기" aria-label="미리보기 패널 닫기">
+    <button class="icon-btn" onclick="closePreview()" title="코드+실행 패널 닫기" aria-label="코드+실행 패널 닫기">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
         <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
       </svg>
     </button>
   </div>
-  <iframe id="preview-frame" title="생성된 코드 미리보기" sandbox="allow-scripts allow-same-origin"></iframe>
-  <div class="preview-code-view" id="preview-code-view"></div>
+  <div class="preview-split">
+    <div class="preview-code-pane">
+      <div class="preview-file-tabs" id="preview-file-tabs"></div>
+      <div class="preview-monaco" id="preview-monaco"></div>
+    </div>
+    <div class="preview-resizer" id="preview-resizer" role="separator" aria-orientation="vertical"></div>
+    <div class="preview-run-pane">
+      <button class="run-pane-close" onclick="hideRunPane()" title="실행 패널 닫기" aria-label="실행 패널 닫기">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <iframe id="preview-frame" title="생성된 코드 미리보기" sandbox="allow-scripts"></iframe>
+    </div>
+  </div>
 </div>
 
 <!-- ════════ Settings Modal ════════ -->
@@ -297,6 +313,7 @@
 <div class="context-menu" id="context-menu" role="menu" aria-hidden="true"></div>
 <div class="toast-container" id="toast-container" role="status" aria-live="polite" aria-atomic="false"></div>
 
+<script src="/assets/preview_core.js"></script>
 <script src="/assets/main.js"></script>
 </body>
 </html>

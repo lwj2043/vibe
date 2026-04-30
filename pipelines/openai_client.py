@@ -15,6 +15,11 @@ import httpx
 
 from .history import build_model_messages
 
+
+def _client_kwargs(timeout: float) -> dict[str, Any]:
+    # LAN-hosted model servers should be reached directly, even if proxy env vars are broken.
+    return {"timeout": timeout, "trust_env": False}
+
 logger = logging.getLogger(__name__)
 
 # 재시도 설정 — 일시적 네트워크/서버 오류만 재시도한다.
@@ -110,7 +115,7 @@ async def call_llm(
     if temperature is not None:
         body["temperature"] = temperature
 
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with httpx.AsyncClient(**_client_kwargs(600)) as client:
         response = await _post_with_retry(
             client,
             f"{base_url.rstrip('/')}/chat/completions",
@@ -176,7 +181,7 @@ async def call_llm_with_image(
     if temperature is not None:
         body["temperature"] = temperature
 
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with httpx.AsyncClient(**_client_kwargs(600)) as client:
         response = await _post_with_retry(
             client,
             f"{base_url.rstrip('/')}/chat/completions",
@@ -242,7 +247,7 @@ def stream_llm_with_image_sync(
 
     async def _producer() -> None:
         try:
-            async with httpx.AsyncClient(timeout=600) as client:
+            async with httpx.AsyncClient(**_client_kwargs(600)) as client:
                 async with client.stream(
                     "POST", url, json=body, headers=_headers(api_key)
                 ) as resp:
@@ -314,7 +319,7 @@ def stream_llm_sync(
 
     async def _producer() -> None:
         try:
-            async with httpx.AsyncClient(timeout=600) as client:
+            async with httpx.AsyncClient(**_client_kwargs(600)) as client:
                 async with client.stream(
                     "POST", url, json=body, headers=_headers(api_key)
                 ) as resp:

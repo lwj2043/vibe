@@ -460,8 +460,7 @@ function renderMessage(msg, index) {
         content.appendChild(createCodeBlock(cb.code, cb.lang));
       }
     });
-    const combinedBtn = maybeCreateCombinedPreviewButton(content);
-    if (combinedBtn) content.appendChild(combinedBtn);
+    refreshCombinedPreviewButton(content);
     if (elapsedLabel) { const t = document.createElement('div'); t.className = 'msg-time'; t.textContent = elapsedLabel; div.appendChild(t); }
     div.appendChild(buildMessageActions(msg, index));
     enhanceContent(content);
@@ -694,10 +693,6 @@ function createCodeBlock(code, lang) {
     <div class="code-header">
       <span class="code-lang">${lang}</span>
       <div class="code-actions">
-        ${isPreviewable ? `<button class="code-btn run-inline-btn" title="이 코드를 채팅 안에서 바로 실행">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-          인라인 실행
-        </button>` : ''}
         ${isPreviewable ? `<button class="code-btn preview-btn">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           미리보기
@@ -709,9 +704,13 @@ function createCodeBlock(code, lang) {
       </div>
     </div>
     <div class="code-content">${highlightCode(code, lang)}</div>`;
+  const actionsEl = div.querySelector('.code-actions');
+  const headerEl = div.querySelector('.code-header');
+  if (actionsEl && headerEl) {
+    headerEl.insertAdjacentElement('afterend', actionsEl);
+  }
   if (isPreviewable) {
     div.querySelector('.preview-btn').onclick = () => openPreview(code, resolvedLang, div, lang);
-    div.querySelector('.run-inline-btn').onclick = () => toggleInlineSim(div, code, resolvedLang, lang);
   }
   div.querySelector('.copy-code-btn').onclick = (e) => {
     copyText(code);
@@ -777,6 +776,67 @@ let currentPreviewLang = 'html';
 // 같은 메시지(부모 컨테이너) 안의 모든 code-block 을 {경로: 코드} 맵으로 수집
 let currentPreviewFiles = {};
 let currentPreviewEntryPath = '';
+let currentPreviewPrebuilt = null; // { extraFiles, bareMap, compiledSet } | null
+
+function defaultPreviewPathFromLang(lang, files) {
+  const raw = (lang || '').trim();
+  if (raw && raw.includes('.')) return raw;
+  const resolved = resolveLang(raw);
+  const base = ({
+    html: 'index.html',
+    css: 'style.css',
+    javascript: 'script.js',
+    jsx: 'src/App.jsx',
+    tsx: 'src/App.tsx',
+  })[resolved];
+  if (!base) return '';
+  if (!files || !files[base]) return base;
+  const dot = base.lastIndexOf('.');
+  const stem = dot >= 0 ? base.slice(0, dot) : base;
+  const ext = dot >= 0 ? base.slice(dot) : '';
+  let i = 2;
+  while (files[`${stem}-${i}${ext}`]) i++;
+  return `${stem}-${i}${ext}`;
+}
+
+function addPreviewFile(files, lang, content) {
+  if (!content) return;
+  const path = defaultPreviewPathFromLang(lang, files);
+  if (path) files[path] = content;
+}
+
+function previewSandboxBootstrapScript() {
+  if (window.VibePreviewCore) return window.VibePreviewCore.previewSandboxBootstrapScript();
+  return `<script>
+(function(){
+  function makeStorage(){
+    var data = Object.create(null);
+    return {
+      getItem: function(k){ k = String(k); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function(k, v){ data[String(k)] = String(v); },
+      removeItem: function(k){ delete data[String(k)]; },
+      clear: function(){ data = Object.create(null); },
+      key: function(i){ return Object.keys(data)[Number(i)] || null; },
+      get length(){ return Object.keys(data).length; }
+    };
+  }
+  try { Object.defineProperty(window, 'localStorage', { value: makeStorage(), configurable: true }); } catch (e) {}
+  try { Object.defineProperty(window, 'sessionStorage', { value: makeStorage(), configurable: true }); } catch (e) {}
+})();
+<\/script>`;
+}
+
+function injectPreviewSandboxBootstrap(html) {
+  if (window.VibePreviewCore) return window.VibePreviewCore.injectPreviewSandboxBootstrap(html);
+  const boot = previewSandboxBootstrapScript();
+  if (/<head\b[^>]*>/i.test(html)) {
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>\n${boot}`);
+  }
+  if (/<html\b[^>]*>/i.test(html)) {
+    return html.replace(/<html\b([^>]*)>/i, `<html$1>\n<head>${boot}</head>`);
+  }
+  return `${boot}\n${html}`;
+}
 
 function gatherSiblingFiles(triggerEl) {
   const files = {};
@@ -789,9 +849,7 @@ function gatherSiblingFiles(triggerEl) {
       blocks.forEach(blk => {
         const path = blk.dataset.lang || '';
         const content = blk.dataset.code || '';
-        if (path && content && path.includes('.')) {
-          files[path] = content;
-        }
+        addPreviewFile(files, path, content);
       });
       if (blocks.length >= 1) break;
     }
@@ -800,18 +858,441 @@ function gatherSiblingFiles(triggerEl) {
   return files;
 }
 
-function openPreview(code, lang = 'html', triggerEl = null, originalLang = '') {
+/* Parent-side npm bundle cache — avoid re-Babel-transform on every iframe rerun */
+const __npmCache = {}; // spec → { compiled: string, subSpecs: string[], fullUrl: string }
+let __babelLoadPromise = null;
+function ensureBabelAtParent() {
+  if (window.Babel) return Promise.resolve();
+  if (__babelLoadPromise) return __babelLoadPromise;
+  __babelLoadPromise = new Promise((resolve, reject) => {
+    const previousDefine = window.define;
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/@babel/standalone/babel.min.js';
+    s.onload = () => {
+      window.define = previousDefine;
+      if (window.Babel) {
+        resolve();
+      } else {
+        __babelLoadPromise = null;
+        reject(new Error('Babel loaded, but window.Babel was not created'));
+      }
+    };
+    s.onerror = () => {
+      window.define = previousDefine;
+      __babelLoadPromise = null;
+      reject(new Error('Babel script failed to load'));
+    };
+    window.define = undefined;
+    document.head.appendChild(s);
+  });
+  return __babelLoadPromise;
+}
+function __scanImports(src) {
+  const out = new Set();
+  const re1 = /(?:import|export)\s*(?:[^'"\n;]*?\s+from\s+)?['"]([^'"]+)['"]/g;
+  const re2 = /import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  let m;
+  while ((m = re1.exec(src))) out.add(m[1]);
+  while ((m = re2.exec(src))) out.add(m[1]);
+  return [...out];
+}
+async function fetchAndCompileNpm(spec, fullUrl) {
+  if (__npmCache[spec]) {
+    if (!/Babel.*not defined|Babel loaded, but window\.Babel/i.test(__npmCache[spec].compiled || '')) return;
+    delete __npmCache[spec];
+  }
+  // 자리 표시: 동시 호출 시 중복 fetch 방지
+  __npmCache[spec] = { compiled: '', subSpecs: [], fullUrl };
+  let src;
+  try {
+    const res = await fetch(fullUrl);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    src = await res.text();
+  } catch (e) {
+    __npmCache[spec].compiled = 'throw new Error(' + JSON.stringify('패키지 로드 실패: ' + spec + ' — ' + (e.message || e)) + ');';
+    return;
+  }
+  // Babel transform-modules-commonjs
+  let compiled;
+  try {
+    if (!window.Babel) throw new Error('window.Babel is not defined');
+    compiled = window.Babel.transform(src, {
+      plugins: ['transform-modules-commonjs'],
+      filename: spec,
+      compact: true,
+      sourceMaps: false,
+    }).code;
+  } catch (e) {
+    compiled = 'throw new Error(' + JSON.stringify('Babel 변환 실패: ' + spec + ' — ' + (e.message || e)) + ');';
+  }
+  // 절대 URL/경로 deps 만 재귀 (bare 는 외부화된 peer 로 가정)
+  const subSpecs = __scanImports(src).filter(s =>
+    /^(https?:\/\/[^\s]+|\/[a-zA-Z@][^\s]*)$/.test(s)
+  );
+  __npmCache[spec].compiled = compiled;
+  __npmCache[spec].subSpecs = subSpecs;
+  const base = new URL(fullUrl);
+  await Promise.all(subSpecs.map(s => {
+    if (__npmCache[s]) return;
+    return fetchAndCompileNpm(s, new URL(s, base).href);
+  }));
+}
+async function prefetchBareDeps(files) {
+  // Keep Babel package transforms inside the sandboxed iframe. Loading Babel in
+  // the parent page can collide with Monaco's AMD loader during generation.
+  return { extraFiles: {}, bareMap: {}, compiledSet: [] };
+}
+
+async function prefetchBareDepsInParent(files) {
+  const bareSpecs = new Set();
+  for (const p in files) {
+    if (!/\.(jsx|tsx|js|ts|mjs)$/i.test(p)) continue;
+    for (const s of __scanImports(files[p])) {
+      if (s.startsWith('.') || s.startsWith('/') || s.startsWith('http')) continue;
+      if (s === 'react' || s === 'react-dom' || s === 'react-dom/client'
+          || s === 'react/jsx-runtime' || s === 'react/jsx-dev-runtime') continue;
+      bareSpecs.add(s);
+    }
+  }
+  if (!bareSpecs.size) return { extraFiles: {}, bareMap: {}, compiledSet: [] };
+  // Keep Babel package transforms inside the sandboxed iframe. Loading Babel in
+  // the parent page can collide with Monaco's AMD loader during generation.
+  return { extraFiles: {}, bareMap: {}, compiledSet: [] };
+  try {
+    await ensureBabelAtParent();
+  } catch (e) {
+    return { extraFiles: {}, bareMap: {}, compiledSet: [] };
+  }
+  await Promise.all([...bareSpecs].map(s =>
+    fetchAndCompileNpm(s, 'https://esm.sh/' + s + '?bundle&external=react,react-dom')
+  ));
+  // npm 캐시를 가상 파일로 변환
+  const extraFiles = {};
+  const bareMap = {};
+  const compiledSet = [];
+  let i = 0;
+  for (const spec in __npmCache) {
+    const safe = (spec.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)) || ('pkg' + (++i));
+    const vpath = '__npm__/' + (++i) + '_' + safe + '.js';
+    extraFiles[vpath] = __npmCache[spec].compiled;
+    bareMap[spec] = vpath;
+    compiledSet.push(vpath);
+  }
+  return { extraFiles, bareMap, compiledSet };
+}
+
+/* Preview code editor. Kept under the old Monaco function names to avoid
+   touching the rest of the preview flow, but this is a local textarea editor.
+   Monaco's AMD loader collides with Babel/preview scripts after reopen. */
+let monacoEditor = null;
+let monacoModels = {};        // path -> { value, getValue(), setValue() }
+let activeMonacoPath = '';
+let autoRerunTimer = null;
+let suppressMonacoEvents = false;
+let previewRenderSeq = 0;
+
+function createPreviewMonacoEditor() {
+  if (monacoEditor) return monacoEditor;
+  const host = $('preview-monaco');
+  if (!host) return null;
+  host.innerHTML = '';
+  const editor = document.createElement('textarea');
+  editor.className = 'preview-code-editor';
+  editor.spellcheck = false;
+  editor.autocapitalize = 'off';
+  editor.autocomplete = 'off';
+  editor.wrap = 'off';
+  editor.addEventListener('input', () => {
+    if (activeMonacoPath && monacoModels[activeMonacoPath]) {
+      monacoModels[activeMonacoPath].setValue(editor.value);
+    }
+    if (suppressMonacoEvents) return;
+    scheduleAutoRerun();
+  });
+  host.appendChild(editor);
+  monacoEditor = editor;
+  return monacoEditor;
+}
+
+window.addEventListener('error', event => {
+  const msg = String(event && event.message || '');
+  if (/Can only have one anonymous define call per script file|Duplicate definition of module 'vs\/editor\/editor\.main'/.test(msg)) {
+    event.preventDefault();
+  }
+}, true);
+
+function ensureMonaco() {
+  return Promise.resolve(createPreviewMonacoEditor());
+}
+
+function langFromPath(path) {
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return ({ js:'javascript', mjs:'javascript', cjs:'javascript',
+           jsx:'javascript', ts:'typescript', tsx:'typescript',
+           html:'html', htm:'html', css:'css', scss:'scss', less:'less',
+           json:'json', md:'markdown', py:'python', vue:'html', svelte:'html',
+           xml:'xml', yml:'yaml', yaml:'yaml' })[ext] || 'plaintext';
+}
+
+function previewLangFromPath(path, fallback) {
+  if (/\.(jsx|tsx)$/i.test(path)) return 'jsx';
+  if (/\.html?$/i.test(path)) return 'html';
+  if (/\.css$/i.test(path)) return 'css';
+  if (/\.m?js$/i.test(path)) return 'javascript';
+  return fallback || 'html';
+}
+
+function isPreviewRunnablePath(path) {
+  return /\.(html?|jsx|tsx|m?js|ts)$/i.test(path || '');
+}
+
+function pickReactEntryPath(files, preferredPath) {
+  const exists = p => p && files[p] && /\.(jsx|tsx|m?js|ts)$/i.test(p);
+  const isRealEntry = p => exists(p) && (
+    /(^|\/)(main|index)\.(jsx|tsx|m?js|ts)$/i.test(p) ||
+    /createRoot|ReactDOM\.render/.test(files[p])
+  );
+  if (isRealEntry(preferredPath)) return preferredPath;
+  for (const p of [
+    'src/main.jsx', 'src/main.tsx', 'src/index.jsx', 'src/index.tsx',
+    'main.jsx', 'main.tsx', 'index.jsx', 'index.tsx',
+    'src/main.js', 'src/index.js', 'main.js', 'index.js',
+  ]) {
+    if (exists(p)) return p;
+  }
+  for (const p of Object.keys(files)) {
+    if (isRealEntry(p)) return p;
+  }
+  return '';
+}
+
+function pickHtmlEntryPath(files, preferredPath) {
+  if (window.VibePreviewCore) return window.VibePreviewCore.pickHtmlEntryPath(files, preferredPath);
+  if (preferredPath && files[preferredPath] && /\.html?$/i.test(preferredPath)) return preferredPath;
+  const paths = Object.keys(files || {});
+  for (const p of ['index.html', 'index.htm']) {
+    const hit = paths.find(x => x.toLowerCase() === p || x.toLowerCase().endsWith('/' + p));
+    if (hit) return hit;
+  }
+  return paths.find(p => /\.html?$/i.test(p)) || '';
+}
+
+function pickPreviewEntryPath(files, preferredPath, activePath) {
+  const paths = Object.keys(files || {});
+  const hasReact = paths.some(p => /\.(jsx|tsx)$/i.test(p));
+  if (hasReact) return pickReactEntryPath(files, preferredPath);
+  const htmlEntry = pickHtmlEntryPath(files, preferredPath);
+  if (htmlEntry) return htmlEntry;
+  for (const p of [preferredPath, activePath]) {
+    if (p && files[p] && isPreviewRunnablePath(p)) return p;
+  }
+  return paths.find(isPreviewRunnablePath) || paths[0] || '';
+}
+
+function setMonacoFiles(files, entryPath) {
+  if (!monacoEditor) createPreviewMonacoEditor();
+  if (!monacoEditor) return;
+  suppressMonacoEvents = true;
+  monacoModels = {};
+  Object.entries(files).forEach(([path, code]) => {
+    monacoModels[path] = {
+      value: String(code || ''),
+      language: langFromPath(path),
+      getValue() { return this.value; },
+      setValue(v) { this.value = String(v || ''); },
+    };
+  });
+  const paths = Object.keys(files);
+  const initial = entryPath && files[entryPath] ? entryPath : paths[0];
+  activeMonacoPath = initial || '';
+  renderFileTabs(paths);
+  monacoEditor.value = initial ? monacoModels[initial].getValue() : '';
+  suppressMonacoEvents = false;
+}
+
+function renderFileTabs(paths) {
+  const bar = $('preview-file-tabs');
+  if (!bar) return;
+  bar.innerHTML = '';
+  paths.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'preview-file-tab' + (p === activeMonacoPath ? ' active' : '');
+    b.type = 'button';
+    b.textContent = p;
+    b.onclick = () => selectMonacoFile(p);
+    bar.appendChild(b);
+  });
+}
+
+function selectMonacoFile(path) {
+  if (!monacoModels[path] || !monacoEditor) return;
+  if (activeMonacoPath && monacoModels[activeMonacoPath]) {
+    monacoModels[activeMonacoPath].setValue(monacoEditor.value);
+  }
+  activeMonacoPath = path;
+  suppressMonacoEvents = true;
+  monacoEditor.value = monacoModels[path].getValue();
+  suppressMonacoEvents = false;
+  document.querySelectorAll('.preview-file-tab').forEach(t =>
+    t.classList.toggle('active', t.textContent === path));
+}
+
+function scheduleAutoRerun() {
+  clearTimeout(autoRerunTimer);
+  autoRerunTimer = setTimeout(rerunFromMonaco, 400);
+}
+
+function previewStatusSrcdoc(message) {
+  return `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#b91c1c;padding:24px}
+pre{white-space:pre-wrap;font:13px/1.6 ui-monospace,Menlo,Consolas,monospace}
+</style></head><body><pre>${escapeHtml(message || 'Preview document is empty.')}</pre></body></html>`;
+}
+
+function mountPreviewSrcdoc(srcdoc) {
+  const frame = $('preview-frame');
+  if (!frame) return;
+  const next = frame.cloneNode(false);
+  next.id = 'preview-frame';
+  next.title = frame.title || 'preview';
+  next.setAttribute('sandbox', frame.getAttribute('sandbox') || 'allow-scripts');
+  next.srcdoc = srcdoc || previewStatusSrcdoc('미리보기 문서가 비어 있습니다.');
+  frame.replaceWith(next);
+}
+
+async function buildPreviewSrcdocFromFiles(files, preferredEntry = '', activePath = '') {
+  const entry = pickPreviewEntryPath(files, preferredEntry, activePath);
+  const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
+  if (hasReact) {
+    const prebuilt = await prefetchBareDeps(files);
+    currentPreviewPrebuilt = prebuilt;
+    currentPreviewEntryPath = pickReactEntryPath(files, entry);
+    currentPreviewCode = currentPreviewEntryPath ? files[currentPreviewEntryPath] : '';
+    currentPreviewLang = 'jsx';
+    return buildReactMultiFilePreview(files, entry, prebuilt);
+  }
+  const htmlEntry = pickHtmlEntryPath(files, entry);
+  if (htmlEntry) {
+    currentPreviewEntryPath = htmlEntry;
+    currentPreviewCode = files[htmlEntry];
+    currentPreviewLang = 'html';
+    currentPreviewPrebuilt = null;
+    return buildCombinedHtmlSrcdoc(files, htmlEntry);
+  }
+  const entryCode = entry ? files[entry] : '';
+  const entryLang = previewLangFromPath(entry, currentPreviewLang);
+  currentPreviewEntryPath = entry;
+  currentPreviewCode = entryCode;
+  currentPreviewLang = entryLang;
+  currentPreviewPrebuilt = null;
+  return buildPreviewSrcdoc(entryCode, entryLang);
+}
+
+async function rerunFromMonaco() {
+  const renderSeq = previewRenderSeq;
+  const files = {};
+  if (activeMonacoPath && monacoEditor && monacoModels[activeMonacoPath]) {
+    monacoModels[activeMonacoPath].setValue(monacoEditor.value);
+  }
+  Object.entries(monacoModels).forEach(([p, m]) => { files[p] = m.getValue(); });
+  if (!Object.keys(files).length) return;
+  currentPreviewFiles = files;
+  const srcdoc = await buildPreviewSrcdocFromFiles(files, currentPreviewEntryPath, activeMonacoPath);
+  if (renderSeq !== previewRenderSeq || !previewPanel.classList.contains('open')) return;
+  mountPreviewSrcdoc(srcdoc);
+}
+
+async function openPreview(code, lang = 'html', triggerEl = null, originalLang = '') {
   currentPreviewCode = code;
   currentPreviewLang = (lang || 'html').toLowerCase();
   currentPreviewFiles = gatherSiblingFiles(triggerEl);
   currentPreviewEntryPath = originalLang || '';
+
+  // 멀티파일이 비어 있으면 단일 가상 파일로 통합
+  let files = currentPreviewFiles;
+  let entry = currentPreviewEntryPath;
+  if (!files || !Object.keys(files).length) {
+    const fname = (entry && entry.includes('.'))
+      ? entry
+      : `index.${currentPreviewLang === 'jsx' ? 'jsx'
+          : currentPreviewLang === 'css' ? 'css'
+          : currentPreviewLang === 'javascript' ? 'js' : 'html'}`;
+    files = { [fname]: code };
+    entry = fname;
+    currentPreviewFiles = files;
+    currentPreviewEntryPath = entry;
+  }
+
   previewPanel.classList.add('open');
-  switchPreviewTab('preview');
+  previewRenderSeq++;
+  requestAnimationFrame(() => {
+    if (monacoEditor) {
+      try { monacoEditor.layout(); } catch (e) {}
+    }
+  });
+  entry = pickPreviewEntryPath(files, entry, entry);
+  currentPreviewEntryPath = entry;
+  await ensureMonaco();
+  setMonacoFiles(files, entry);
+  requestAnimationFrame(() => {
+    if (monacoEditor) {
+      try { monacoEditor.layout(); } catch (e) {}
+    }
+  });
+  // React 멀티파일이면 부모에서 npm 의존성 미리 컴파일
+  const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
+  if (hasReact) {
+    currentPreviewPrebuilt = await prefetchBareDeps(files);
+  } else {
+    currentPreviewPrebuilt = null;
+  }
+  await switchPreviewTab('preview');
 }
 
 function closePreview() {
+  previewRenderSeq++;
   previewPanel.classList.remove('open');
+  previewPanel.classList.remove('run-collapsed');
+  // 인라인 스타일(리사이저 드래그로 설정된 것)도 초기화해야 완전히 닫힘
+  previewPanel.style.width = '';
+  previewPanel.style.minWidth = '';
+  const showBtn = $('show-run-btn');
+  if (showBtn) showBtn.classList.add('is-hidden');
   $('preview-frame').srcdoc = '';
+  monacoModels = {};
+  activeMonacoPath = '';
+  currentPreviewFiles = {};
+  currentPreviewEntryPath = '';
+  currentPreviewPrebuilt = null;
+  if (monacoEditor) monacoEditor.value = '';
+  renderFileTabs([]);
+  clearTimeout(autoRerunTimer);
+}
+
+function hideRunPane() {
+  previewRenderSeq++;
+  previewPanel.classList.add('run-collapsed');
+  const showBtn = $('show-run-btn');
+  if (showBtn) showBtn.classList.remove('is-hidden');
+}
+
+async function showRunPane() {
+  previewRenderSeq++;
+  const renderSeq = previewRenderSeq;
+  previewPanel.classList.remove('run-collapsed');
+  const showBtn = $('show-run-btn');
+  if (showBtn) showBtn.classList.add('is-hidden');
+  // Monaco 모델이 없으면(전체 미리보기 등) currentPreviewFiles 로 직접 재빌드
+  const hasMonacoFiles = Object.keys(monacoModels).length > 0;
+  if (hasMonacoFiles) {
+    await rerunFromMonaco();
+  } else if (currentPreviewFiles && Object.keys(currentPreviewFiles).length) {
+    const srcdoc = await buildPreviewSrcdocFromFiles(currentPreviewFiles, currentPreviewEntryPath, activeMonacoPath);
+    if (renderSeq !== previewRenderSeq || !previewPanel.classList.contains('open')) return;
+    mountPreviewSrcdoc(srcdoc);
+  }
 }
 
 /* Inline simulation — render iframe directly under code block */
@@ -825,7 +1306,14 @@ function toggleInlineSim(codeBlockEl, code, resolvedLang, originalLang) {
   // 형제 코드블록 정보 활용해 멀티파일도 지원
   currentPreviewFiles = gatherSiblingFiles(codeBlockEl);
   currentPreviewEntryPath = originalLang || '';
-  const srcdoc = buildPreviewSrcdoc(code, resolvedLang);
+  const entry = pickPreviewEntryPath(
+    currentPreviewFiles,
+    defaultPreviewPathFromLang(originalLang || resolvedLang, currentPreviewFiles),
+    ''
+  );
+  const srcdoc = /\.(html?|htm)$/i.test(entry || '')
+    ? buildCombinedHtmlSrcdoc(currentPreviewFiles, entry)
+    : buildPreviewSrcdoc(code, resolvedLang);
 
   const wrap = document.createElement('div');
   wrap.className = 'inline-sim';
@@ -834,7 +1322,7 @@ function toggleInlineSim(codeBlockEl, code, resolvedLang, originalLang) {
       <span>▶ 인라인 실행 — ${escapeHtml(originalLang || resolvedLang)}</span>
       <button class="inline-sim-close" title="닫기">✕ 닫기</button>
     </div>
-    <iframe sandbox="allow-scripts allow-same-origin"></iframe>`;
+    <iframe sandbox="allow-scripts"></iframe>`;
   wrap.querySelector('iframe').srcdoc = srcdoc;
   wrap.querySelector('.inline-sim-close').onclick = () => wrap.remove();
   codeBlockEl.insertAdjacentElement('afterend', wrap);
@@ -845,7 +1333,29 @@ function toggleInlineSim(codeBlockEl, code, resolvedLang, originalLang) {
 // - .css 는 <style> 로 주입
 // - .jsx/.tsx/.js/.ts 는 Babel 로 CommonJS 변환 후 require 체인으로 실행
 // - import 'react'/'react-dom'/'react-dom/client' 는 내장 매핑
-function buildReactMultiFilePreview(files, preferredEntry) {
+function buildReactMultiFilePreview(files, preferredEntry, prebuilt) {
+  // prebuilt: { extraFiles, bareMap, compiledSet } — 부모에서 컴파일된 npm 번들
+  if (prebuilt) {
+    files = Object.assign({}, files, prebuilt.extraFiles);
+  }
+
+  // Tailwind 감지: CSS 파일에 @tailwind 가 있거나 package.json 에 tailwindcss 의존성
+  let usesTailwind = false;
+  for (const p in files) {
+    if (/\.css$/i.test(p) && /@tailwind\s+(base|components|utilities)/.test(files[p])) {
+      usesTailwind = true; break;
+    }
+    if (/(^|\/)package\.json$/i.test(p)) {
+      try {
+        const pkg = JSON.parse(files[p]);
+        const deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
+        if (deps && deps.tailwindcss) usesTailwind = true;
+      } catch (e) {}
+    }
+  }
+  const tailwindScript = usesTailwind
+    ? '<script src="https://cdn.tailwindcss.com"><\/script>'
+    : '';
   // 엔트리 후보: main.jsx → index.jsx → App.jsx 순
   const entryCandidates = [
     preferredEntry,
@@ -883,26 +1393,115 @@ function buildReactMultiFilePreview(files, preferredEntry) {
 <head>
 <meta charset="utf-8">
 <title>React Preview</title>
+${previewSandboxBootstrapScript()}
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:16px;background:#fff;color:#111;}</style>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
+<script>
+  window.__vibePreviewDefine = window.define;
+  try { window.define = undefined; } catch (e) {}
+<\/script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+<script>
+  if (window.__vibePreviewDefine) window.define = window.__vibePreviewDefine;
+  else try { delete window.define; } catch (e) { window.define = undefined; }
+  delete window.__vibePreviewDefine;
+<\/script>
+${tailwindScript}
 </head>
 <body>
 <div id="root"></div>
 <script>
   const __files = ${filesJson};
   const __modules = {};
+  const __bareMap = ${JSON.stringify((prebuilt && prebuilt.bareMap) || {})};   // 부모에서 미리 채운 bare → 가상경로
+  const __compiledSet = new Set(${JSON.stringify((prebuilt && prebuilt.compiledSet) || [])}); // Babel 건너뛸 가상파일
   const __reactExports = Object.assign({ default: React, __esModule: true }, React);
   const __reactDomExports = Object.assign({ default: ReactDOM, __esModule: true }, ReactDOM);
   const __builtins = {
     'react': __reactExports,
+    'react/jsx-runtime': __reactExports,
+    'react/jsx-dev-runtime': __reactExports,
     'react-dom': __reactDomExports,
     'react-dom/client': __reactDomExports,
   };
 
+  // 모든 파일에서 bare 패키지 import 를 추출
+  function collectBareSpecs() {
+    const specs = new Set();
+    const re1 = /(?:^|[\\n;])\\s*import\\s+(?:[^'"\\n]+\\s+from\\s+)?['"]([^'"]+)['"]/g;
+    const re2 = /(?:^|[\\n;])\\s*export\\s+(?:\\*|\\{[^}]*\\})\\s+from\\s+['"]([^'"]+)['"]/g;
+    const re3 = /\\brequire\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+    function add(spec) {
+      if (!spec) return;
+      if (spec.startsWith('.') || spec.startsWith('/')) return;
+      if (__builtins[spec]) return;
+      specs.add(spec);
+    }
+    for (const p in __files) {
+      if (!/\\.(jsx|tsx|js|ts|mjs)$/i.test(p)) continue;
+      const src = __files[p];
+      let m;
+      re1.lastIndex = 0; while ((m = re1.exec(src))) add(m[1]);
+      re2.lastIndex = 0; while ((m = re2.exec(src))) add(m[1]);
+      re3.lastIndex = 0; while ((m = re3.exec(src))) add(m[1]);
+    }
+    return [...specs];
+  }
+
+  let __npmCounter = 0;
+  // spec(또는 절대 URL) → 가상 경로. resolvePath 가 __bareMap[to] 로 조회.
+  async function fetchToVirtual(spec, fullUrl) {
+    if (__bareMap[spec]) return;
+    const vpath = '__npm__/' + (++__npmCounter) + '_' + spec.replace(/[^a-zA-Z0-9._\\-]/g, '_').slice(0, 60) + '.js';
+    __bareMap[spec] = vpath;
+    let code;
+    try {
+      const res = await fetch(fullUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      code = await res.text();
+    } catch (e) {
+      __files[vpath] = 'throw new Error(' + JSON.stringify('패키지 로드 실패: ' + spec + ' — ' + (e && e.message || e)) + ');';
+      return;
+    }
+    __files[vpath] = code;
+    // 재귀: 가져온 코드 내부의 절대경로/URL import 도 따라가기
+    const subSpecs = new Set();
+    const reAll = /(?:import|export)\\s*(?:[^'"\\n;]*?\\s+from\\s+)?['"]([^'"]+)['"]/g;
+    const reDyn = /import\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+    let m;
+    while ((m = reAll.exec(code))) subSpecs.add(m[1]);
+    while ((m = reDyn.exec(code))) subSpecs.add(m[1]);
+    const base = new URL(fullUrl);
+    // 정규식이 minified bundle 에서 garbage 를 잡을 수 있으므로 spec 형태를 엄격히 검증
+    const isUrlOrAbs = (s) => /^(https?:\\/\\/[^\\s]+|\\/[a-zA-Z@][^\\s]*)$/.test(s);
+    await Promise.all([...subSpecs].map(s => {
+      if (__builtins[s]) return;
+      // 이미 fetch 된 stub/번들 안에서는 절대 URL / 절대 경로만 따라간다.
+      // (bare specifier 는 외부화된 peer dep 으로 가정 — __builtins 에서 처리)
+      if (!isUrlOrAbs(s)) return;
+      if (__bareMap[s]) return;
+      let full;
+      try { full = new URL(s, base).href; } catch (e) { return; }
+      return fetchToVirtual(s, full);
+    }));
+  }
+
+  async function preloadBareDeps() {
+    // 부모에서 이미 컴파일/주입했다면 스킵
+    if (Object.keys(__bareMap).length > 0) return;
+    const specs = collectBareSpecs();
+    if (!specs.length) return;
+    const root = document.getElementById('root');
+    if (root) root.innerHTML = '<div style="padding:16px;color:#666;font-family:ui-monospace,monospace;font-size:12px">📦 npm 패키지 로딩 중: ' + specs.join(', ') + '...</div>';
+    await Promise.all(specs.map(spec =>
+      fetchToVirtual(spec, 'https://esm.sh/' + spec + '?bundle&external=react,react-dom')
+    ));
+  }
+
   function resolvePath(from, to) {
     if (__builtins[to]) return to;
+    if (__bareMap[to]) return __bareMap[to];
     const fromDir = from ? from.split('/').slice(0, -1).join('/') : '';
     let abs;
     if (to.startsWith('./') || to.startsWith('../')) {
@@ -948,11 +1547,15 @@ function buildReactMultiFilePreview(files, preferredEntry) {
       return __modules[resolved].exports;
     }
 
+    // 부모에서 미리 컴파일된 npm 번들은 Babel 건너뛰기
+    let transformed;
+    if (__compiledSet.has(resolved)) {
+      transformed = src;
+    } else {
     const isTS = /\\.tsx?$/.test(resolved);
     const presets = isTS
       ? [['react'], ['typescript', { allExtensions: true, isTSX: true }]]
       : [['react']];
-    let transformed;
     try {
       transformed = Babel.transform(src, {
         presets: presets,
@@ -961,6 +1564,7 @@ function buildReactMultiFilePreview(files, preferredEntry) {
       }).code;
     } catch (e) {
       throw new Error('Babel 변환 실패 (' + resolved + '): ' + (e.message || e));
+    }
     }
 
     const mod = { exports: {} };
@@ -974,19 +1578,22 @@ function buildReactMultiFilePreview(files, preferredEntry) {
     return mod.exports;
   }
 
-  try {
-    const entryExports = requireModule('./' + '${entry}', '');
-    ${manualMount ? `
-      const AppComp = entryExports.default || entryExports.App || entryExports;
-      if (!AppComp) throw new Error('App 컴포넌트를 export 해주세요.');
-      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(AppComp));
-    ` : '// entry 파일이 자체적으로 createRoot 호출'}
-  } catch (e) {
-    document.getElementById('root').innerHTML =
-      '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">' +
-      (e && e.message ? e.message : String(e)) +
-      (e && e.stack ? '\\n\\n' + e.stack : '') + '</pre>';
-  }
+  (async () => {
+    try {
+      await preloadBareDeps();
+      const entryExports = requireModule('./' + '${entry}', '');
+      ${manualMount ? `
+        const AppComp = entryExports.default || entryExports.App || entryExports;
+        if (!AppComp) throw new Error('App 컴포넌트를 export 해주세요.');
+        ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(AppComp));
+      ` : '// entry 파일이 자체적으로 createRoot 호출'}
+    } catch (e) {
+      document.getElementById('root').innerHTML =
+        '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">' +
+        (e && e.message ? e.message : String(e)) +
+        (e && e.stack ? '\\n\\n' + e.stack : '') + '</pre>';
+    }
+  })();
 <\/script>
 </body>
 </html>`;
@@ -994,7 +1601,7 @@ function buildReactMultiFilePreview(files, preferredEntry) {
 
 function buildPreviewSrcdoc(code, lang) {
   const l = (lang || 'html').toLowerCase();
-  if (l === 'html') return code;
+  if (l === 'html') return injectPreviewSandboxBootstrap(code);
 
   // Node.js / 서버 사이드 JS 감지 → 브라우저에서 실행 불가하므로 안내 화면
   const isNodeCode = l === 'javascript' && /(^|\n)\s*(const|let|var)\s+\w+\s*=\s*require\s*\(|module\.exports|process\.(env|argv)|app\.listen\s*\(|require\s*\(\s*['"]express['"]\s*\)/.test(code);
@@ -1027,7 +1634,7 @@ function buildPreviewSrcdoc(code, lang) {
     const files = currentPreviewFiles || {};
     const multiFile = Object.keys(files).filter(p => /\.(jsx|tsx|js|ts|css)$/i.test(p)).length >= 2;
     if (multiFile) {
-      return buildReactMultiFilePreview(files, currentPreviewEntryPath);
+      return buildReactMultiFilePreview(files, currentPreviewEntryPath, currentPreviewPrebuilt);
     }
 
     // 단일 파일 폴백: import/export 제거 + React hooks 전역 노출
@@ -1036,15 +1643,26 @@ function buildPreviewSrcdoc(code, lang) {
       .replace(/^\s*export\s+default\s+/gm, '')
       .replace(/^\s*export\s+/gm, '');
     const presets = (l === 'tsx') ? 'react,typescript' : 'react';
+    const babelScript = `<script>
+  window.__vibePreviewDefine = window.define;
+  try { window.define = undefined; } catch (e) {}
+<\/script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+<script>
+  if (window.__vibePreviewDefine) window.define = window.__vibePreviewDefine;
+  else try { delete window.define; } catch (e) { window.define = undefined; }
+  delete window.__vibePreviewDefine;
+<\/script>`;
     return `<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <title>React Preview</title>
+${previewSandboxBootstrapScript()}
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:16px;background:#fff;color:#111;}</style>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+${babelScript}
 <script>
   // React hooks 와 자주 쓰는 API 를 전역으로 노출 — import 제거된 코드가 바로 쓰게.
   window.useState = React.useState;
@@ -1145,8 +1763,35 @@ function _pickHtmlEntry(files) {
   return names.find(n => _hasExt(n, _HTML_EXTS)) || null;
 }
 
-function buildCombinedHtmlSrcdoc(files) {
-  const entry = _pickHtmlEntry(files);
+function _normalizeAssetRef(ref) {
+  return (ref || '').split('#')[0].split('?')[0].replace(/^\.?\//, '').replace(/^\/+/, '');
+}
+
+function _findPreviewAsset(files, ref, entry) {
+  const wanted = _normalizeAssetRef(ref);
+  if (!wanted) return '';
+  const entryDir = entry && entry.includes('/') ? entry.split('/').slice(0, -1).join('/') : '';
+  const candidates = [
+    wanted,
+    entryDir ? `${entryDir}/${wanted}` : wanted,
+    wanted.split('/').pop(),
+  ].filter(Boolean);
+  return Object.keys(files).find(k => {
+    const key = _normalizeAssetRef(k);
+    const keyBase = key.split('/').pop();
+    return candidates.some(c => key === c || key.endsWith('/' + c) || c.endsWith('/' + key) || keyBase === c);
+  }) || '';
+}
+
+function _scriptOpenTagWithoutSrc(match) {
+  return match
+    .replace(/\s+src=(["'])[^"']*\1/i, '')
+    .replace(/><\/script>$/i, '>');
+}
+
+function buildCombinedHtmlSrcdoc(files, preferredEntry) {
+  if (window.VibePreviewCore) return window.VibePreviewCore.buildCombinedHtmlSrcdoc(files, preferredEntry);
+  const entry = pickHtmlEntryPath(files, preferredEntry) || _pickHtmlEntry(files);
   if (!entry) return null;
   let html = files[entry];
   const used = new Set([entry]);
@@ -1155,9 +1800,7 @@ function buildCombinedHtmlSrcdoc(files) {
   html = html.replace(
     /<link\b[^>]*?rel=["']stylesheet["'][^>]*?href=["']([^"']+)["'][^>]*?>/gi,
     (match, href) => {
-      const key = Object.keys(files).find(
-        k => k === href || k.endsWith('/' + href) || href.endsWith(k)
-      );
+      const key = _findPreviewAsset(files, href, entry);
       if (key && _hasExt(key, _CSS_EXTS)) {
         used.add(key);
         return `<style>\n${files[key]}\n</style>`;
@@ -1170,12 +1813,10 @@ function buildCombinedHtmlSrcdoc(files) {
   html = html.replace(
     /<script\b[^>]*?src=["']([^"']+)["'][^>]*?><\/script>/gi,
     (match, src) => {
-      const key = Object.keys(files).find(
-        k => k === src || k.endsWith('/' + src) || src.endsWith(k)
-      );
+      const key = _findPreviewAsset(files, src, entry);
       if (key && _hasExt(key, _JS_EXTS)) {
         used.add(key);
-        return `<script>\n${files[key]}\n<\/script>`;
+        return `${_scriptOpenTagWithoutSrc(match)}\n${files[key].replace(/<\/script/gi, '<\\/script')}\n<\/script>`;
       }
       return match;
     }
@@ -1187,7 +1828,7 @@ function buildCombinedHtmlSrcdoc(files) {
     .map(k => `<style>\n${files[k]}\n</style>`).join('\n');
   const orphanScript = Object.keys(files)
     .filter(k => !used.has(k) && _hasExt(k, _JS_EXTS))
-    .map(k => `<script>\n${files[k]}\n<\/script>`).join('\n');
+    .map(k => `<script>\n${files[k].replace(/<\/script/gi, '<\\/script')}\n<\/script>`).join('\n');
   const tail = orphanStyle + orphanScript;
   if (tail) {
     if (/<\/body>/i.test(html)) {
@@ -1196,7 +1837,7 @@ function buildCombinedHtmlSrcdoc(files) {
       html += tail;
     }
   }
-  return html;
+  return injectPreviewSandboxBootstrap(html);
 }
 
 function collectMessageFiles(contentEl) {
@@ -1204,41 +1845,52 @@ function collectMessageFiles(contentEl) {
   contentEl.querySelectorAll('.code-block').forEach(blk => {
     const path = blk.dataset.lang || '';
     const content = blk.dataset.code || '';
-    if (path && content && path.includes('.')) {
-      files[path] = content;
-    }
+    addPreviewFile(files, path, content);
   });
   return files;
 }
 
-function openCombinedPreview(files) {
+function refreshCombinedPreviewButton(contentEl) {
+  if (!contentEl) return;
+  contentEl.querySelectorAll('.combined-preview-btn').forEach(btn => btn.remove());
+  const combinedBtn = maybeCreateCombinedPreviewButton(contentEl);
+  if (combinedBtn) contentEl.appendChild(combinedBtn);
+}
+
+async function openCombinedPreview(files) {
   // React 파일이 섞여 있으면 React 빌더, 아니면 HTML 결합 빌더
   const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
   let srcdoc;
   let langLabel;
+  let entryPath = '';
   if (hasReact) {
-    srcdoc = buildReactMultiFilePreview(files, '');
+    entryPath = pickReactEntryPath(files, '');
+    const prebuilt = await prefetchBareDeps(files);
+    currentPreviewPrebuilt = prebuilt;
+    srcdoc = buildReactMultiFilePreview(files, entryPath, prebuilt);
     langLabel = 'jsx';
   } else {
-    srcdoc = buildCombinedHtmlSrcdoc(files);
+    entryPath = pickHtmlEntryPath(files, '');
+    currentPreviewPrebuilt = null;
+    srcdoc = buildCombinedHtmlSrcdoc(files, entryPath);
     if (!srcdoc) {
       toast && toast('미리보기를 만들 수 있는 HTML/JSX 파일이 없습니다');
       return;
     }
     langLabel = 'html';
   }
-  currentPreviewCode = srcdoc;
+  currentPreviewCode = entryPath && files[entryPath] ? files[entryPath] : srcdoc;
   currentPreviewLang = langLabel;
   currentPreviewFiles = files;
-  currentPreviewEntryPath = '';
+  currentPreviewEntryPath = entryPath;
   previewPanel.classList.add('open');
-  // 위의 switchPreviewTab 은 buildPreviewSrcdoc 을 다시 호출하므로,
-  // React 가 아닌 경우에는 이미 합쳐진 HTML 을 직접 iframe 에 넣는다.
+  previewRenderSeq++;
+  await ensureMonaco();
+  setMonacoFiles(files, entryPath);
   document.querySelectorAll('.preview-tab').forEach(t =>
     t.classList.toggle('active', t.dataset.tab === 'preview'));
   $('preview-frame').style.display = 'block';
-  $('preview-code-view').style.display = 'none';
-  $('preview-frame').srcdoc = srcdoc;
+  mountPreviewSrcdoc(srcdoc);
 }
 
 function maybeCreateCombinedPreviewButton(contentEl) {
@@ -1261,16 +1913,19 @@ function maybeCreateCombinedPreviewButton(contentEl) {
   return btn;
 }
 
-function switchPreviewTab(tab) {
+async function switchPreviewTab(tab) {
+  const renderSeq = previewRenderSeq;
+  tab = 'preview';
   document.querySelectorAll('.preview-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-  if (tab === 'preview') {
-    $('preview-frame').style.display = 'block';
-    $('preview-code-view').style.display = 'none';
-    $('preview-frame').srcdoc = buildPreviewSrcdoc(currentPreviewCode, currentPreviewLang);
+  $('preview-frame').style.display = 'block';
+  if (Object.keys(monacoModels).length) {
+    await rerunFromMonaco();
+  } else if (currentPreviewFiles && Object.keys(currentPreviewFiles).length) {
+    const srcdoc = await buildPreviewSrcdocFromFiles(currentPreviewFiles, currentPreviewEntryPath, activeMonacoPath);
+    if (renderSeq !== previewRenderSeq || !previewPanel.classList.contains('open')) return;
+    mountPreviewSrcdoc(srcdoc);
   } else {
-    $('preview-frame').style.display = 'none';
-    $('preview-code-view').style.display = 'block';
-    $('preview-code-view').textContent = currentPreviewCode;
+    mountPreviewSrcdoc(buildPreviewSrcdoc(currentPreviewCode, currentPreviewLang));
   }
 }
 
@@ -1360,6 +2015,7 @@ function updateStreamingContent(contentEl, text) {
   });
 
   // 열림 상태 복원
+  refreshCombinedPreviewButton(contentEl);
   contentEl.querySelectorAll('details').forEach((d, i) => {
     if (prevOpenStates[i]) d.open = true;
   });
@@ -2183,7 +2839,11 @@ function updateSendBtn() {
  * ════════════════════════════════════════════ */
 function authHeaders() {
   const t = localStorage.getItem('vibe_auth_token');
-  return t ? { Authorization: `Bearer ${t}` } : {};
+  const user = localStorage.getItem('vibe_auth_user');
+  const headers = {};
+  if (t) headers.Authorization = `Bearer ${t}`;
+  if (user) headers['X-Vibe-User'] = user;
+  return headers;
 }
 
 function isLoggedIn() {
@@ -2383,6 +3043,84 @@ function init() {
   // Load TTS voices
   if ('speechSynthesis' in window) {
     speechSynthesis.onvoiceschanged = () => { if ($('settings-modal').classList.contains('open')) populateSettings(); };
+  }
+
+  // Preview panel width resizer (왼쪽 가장자리)
+  const panelResizer = $('preview-panel-resizer');
+  if (panelResizer && previewPanel) {
+    let pDrag = false;
+    panelResizer.addEventListener('mousedown', (e) => {
+      pDrag = true;
+      panelResizer.classList.add('dragging');
+      previewPanel.classList.add('resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!pDrag) return;
+      const total = window.innerWidth;
+      const newWidth = total - e.clientX;
+      const pct = (newWidth / total) * 100;
+      if (pct >= 20 && pct <= 90) {
+        previewPanel.style.width = pct + '%';
+        previewPanel.style.minWidth = '320px';
+      }
+    });
+    window.addEventListener('mouseup', () => {
+      if (!pDrag) return;
+      pDrag = false;
+      panelResizer.classList.remove('dragging');
+      previewPanel.classList.remove('resizing');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
+  }
+
+  // Preview split resizer
+  const resizer = $('preview-resizer');
+  if (resizer) {
+    let dragging = false;
+    const onDown = (e) => {
+      dragging = true;
+      resizer.classList.add('dragging');
+      previewPanel && previewPanel.classList.add('split-resizing');
+      document.body.style.cursor = window.matchMedia('(max-width: 768px)').matches ? 'row-resize' : 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!dragging) return;
+      const split = document.querySelector('.preview-split');
+      const codePane = document.querySelector('.preview-code-pane');
+      if (!split || !codePane) return;
+      const rect = split.getBoundingClientRect();
+      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      if (isMobile) {
+        const pct = ((e.clientY - rect.top) / rect.height) * 100;
+        if (pct > 15 && pct < 85) {
+          codePane.style.height = pct + '%';
+          codePane.style.width = '100%';
+        }
+      } else {
+        const pct = ((e.clientX - rect.left) / rect.width) * 100;
+        if (pct > 15 && pct < 85) {
+          codePane.style.width = pct + '%';
+          codePane.style.height = '';
+        }
+      }
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove('dragging');
+      previewPanel && previewPanel.classList.remove('split-resizing');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    resizer.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   }
 }
 

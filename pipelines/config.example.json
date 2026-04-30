@@ -3,7 +3,7 @@
   "base_url": "http://192.168.100.13:8000/v1",
   "model": "gemma-4-31b-it",
   "api_key": "",
-  "max_review_iterations": 0,
-  "review_safety_cap": 50,
+  "max_review_iterations": 1,
+  "review_safety_cap": 1,
   "enable_visual_review": true
 }

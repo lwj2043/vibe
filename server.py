@@ -61,6 +61,11 @@ def index() -> FileResponse:
     )
 
 
+@app.get("/.well-known/appspecific/com.chrome.devtools.json")
+def chrome_devtools_metadata() -> Response:
+    return Response(status_code=204)
+
+
 auth_module.ensure_default_user()
 
 

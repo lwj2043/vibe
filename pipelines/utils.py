@@ -180,9 +180,9 @@ def format_model_error(stage: str, exc: Exception, ollama_url: str) -> str:
         or isinstance(exc, httpx.ConnectError)
     ):
         return (
-            f"{stage} 중 Ollama 서버({ollama_url})에 연결하지 못했습니다.\n"
-            "1) Ollama가 실행 중인지 확인하세요 (`ollama serve`).\n"
-            "2) `pipelines/config.json`의 `ollama_url`이 올바른지 확인하세요.\n"
+            f"{stage} 중 모델이 실행중인 서버({ollama_url})에 연결하지 못했습니다.\n"
+            "1) 모델 실행 중인지 확인하세요.\n"
+            "2) `pipelines/config.json`의 `url`이 올바른지 확인하세요.\n"
             "3) 네트워크/방화벽이 해당 포트(보통 11434)를 막고 있지 않은지 확인하세요."
         )
     if "404" in message and "model" in lowered:

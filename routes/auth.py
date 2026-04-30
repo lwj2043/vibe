@@ -172,6 +172,18 @@ def _verify_credentials(username: str, password: str) -> bool:
 def require_session(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+    if token and token in SESSIONS:
+        return SESSIONS[token]
+
+    # In local development the browser token can outlive the in-memory session
+    # map after a server restart. Restore it from the saved username header.
+    username = request.headers.get("x-vibe-user", "").strip()
+    if token and username:
+        users = _load_users()
+        if any(user.get("username") == username for user in users):
+            SESSIONS[token] = username
+            return username
+
     if not token or token not in SESSIONS:
         raise HTTPException(status_code=401, detail="인증이 필요합니다")
     return SESSIONS[token]
