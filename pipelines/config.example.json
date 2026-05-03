@@ -1,9 +1,12 @@
 {
-  "_comment": "OpenAI 호환 API 엔드포인트. base_url 은 /v1 까지 포함합니다.",
-  "base_url": "http://192.168.100.13:8000/v1",
-  "model": "gemma-4-31b-it",
-  "api_key": "",
+  "_comment": "Local Ollama configuration. base URL should not include /v1.",
+  "ollama_url": "http://localhost:11434",
+  "model": "gemma4:e4b",
+  "plan_model": "gemma4:e4b",
+  "dev_model": "gemma4:e4b",
+  "coder_model": "gemma4:e4b",
+  "keep_alive": -1,
   "max_review_iterations": 1,
   "review_safety_cap": 1,
-  "enable_visual_review": true
+  "enable_visual_review": false
 }

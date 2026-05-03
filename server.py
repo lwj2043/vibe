@@ -19,7 +19,6 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -42,7 +41,6 @@ from routes import spec as spec_module  # noqa: E402
 app = FastAPI(title="Vibe Coding Service")
 # 스트리밍 응답은 GZipMiddleware 가 자동으로 패스스루한다.
 # 일반 JSON/HTML 응답만 1KB 이상일 때 압축한다.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(auth_module.router)
 app.include_router(memory_module.router)
 app.include_router(chat_module.router)

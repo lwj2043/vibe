@@ -97,6 +97,8 @@ FRONTEND_FRAMEWORK_RULE = """
 [방법 2] React
 - 상태 관리가 중요하거나 컴포넌트 재사용이 많은 SPA, 대시보드, 복잡한 상호작용에 사용합니다.
 - Vite 구조를 기본으로 합니다: package.json, index.html, src/main.jsx, src/App.jsx.
+- 엔트리는 반드시 `src/main.jsx`이며, `ReactDOM.createRoot(document.getElementById('root')).render(<App />)` 호출을 포함합니다.
+- 다른 이름(`src/index.js`, `script.js`, `app.js`)을 엔트리로 쓰지 마세요. 파일 경로는 spec의 files 배열과 글자 그대로 일치해야 합니다.
 - TypeScript가 꼭 필요하다고 명시되지 않으면 .jsx를 사용합니다.
 
 [방법 3] Flutter
@@ -115,15 +117,47 @@ SPEC_REFINEMENT_RULE = """
 - acceptance_criteria는 “보인다/동작한다” 수준에서 멈추지 말고 클릭, 입력, 저장, 갱신, 검증처럼 브라우저에서 확인 가능한 조건으로 쓰세요.
 - UI가 필요한 요청은 첫 화면에서 사용자가 바로 조작할 수 있는 실제 앱 화면을 요구하세요. 랜딩/설명 화면으로 대체하지 마세요.
 - files에는 실제 출력해야 할 파일만 넣고, HTML/CSS/JS 요청은 특별한 이유가 없으면 index.html, style.css, script.js 구조를 우선 사용하세요.
+- React 요청(project.type=react-spa)이면 files 에 반드시 다음 4개를 포함하세요: `package.json`, `index.html`, `src/main.jsx`, `src/App.jsx`. 추가 컴포넌트/컨텍스트는 `src/components/<Name>.jsx`, `src/context/<Name>.jsx` 처럼 명시적 경로로 더하세요. `src/index.js`, `src/App.css` 같은 변형 이름은 쓰지 마세요.
 - constraints에는 실행 환경, 금지된 미완성 표현(TODO/placeholder), 모바일 화면, 키보드/마우스 조작, 오류 메시지 표시 기준을 포함하세요.
 """.strip()
 
 CODER_REFINEMENT_RULE = """
+[LANGUAGE RULES - MUST FOLLOW]
+- 답변 설명, 제목, UI 문구, 버튼/라벨/오류 문구, 코드 주석은 모두 한국어로 작성하세요.
+- 영어/일본어 설명을 출력하지 마세요. 단, import/export, 변수명, 파일명, HTML/JS/CSS 문법 키워드는 그대로 둡니다.
+- 사용자가 한국어로 요청하면 최종 결과물의 화면 텍스트도 한국어여야 합니다.
+- "This solution", "Project Structure", "Key Improvements", "Assume", "Skipped for brevity" 같은 영어 설명 문구를 쓰지 마세요.
+- 코드가 아닌 폴더 구조 설명, 구현 요약, 개념 설명은 필요 최소한만 한국어로 쓰고, 파일 코드블록보다 앞세우지 마세요.
+
+[FILE NAMING RULES - MUST FOLLOW]
+- Every generated file must be output in its own Markdown code fence whose fence label is the exact file path.
+- Correct fence labels: ```package.json, ```index.html, ```src/main.jsx, ```src/App.jsx, ```src/components/LoginForm.jsx.
+- Wrong fence labels: ```jsx, ```javascript, ```js, ```text, or a folder-tree checklist for file contents.
+- Do not create duplicate or alternate names for the same role. Use exactly one React entry file: src/main.jsx.
+- Never invent collision suffixes such as App-2.jsx, script-4.js, index-2.html, or similar numbered filenames.
+- Number-only suffix filenames are forbidden. If a component needs a name, use its role or exported component name: src/components/MetricCard.jsx, src/components/DashboardMetrics.jsx, src/pages/DashboardPage.jsx.
+- 파일명에 App-2.jsx, App-3.jsx, script-4.js 처럼 숫자만 붙여서 충돌을 피하지 마세요. 역할명/컴포넌트명으로 식별 가능한 파일명을 사용하세요.
+- The root component must be src/App.jsx and must export default App. Import it from src/main.jsx with import App from './App'.
+- If a file is imported, the matching code fence for that exact path must exist. Do not import files that are only shown in a folder tree.
+- Never write "Assume the component is imported/available". If a component is used, include the actual import line and the actual component file.
+- Every React component file must export its component. Use export default for one main component per file.
+- React props must match exactly between parent and child. If a child receives `onReviewSubmit`, the parent must render `<ReviewForm onReviewSubmit={...} />`; do not silently rename it to `onSubmit`.
+- Do not call undefined handlers or variables. Every function used in JSX such as `validateForm`, `handleSubmit`, `onSave`, or every component such as `ReviewForm` must be defined in the same file or imported from an existing file.
+- Do not include final "folder structure checklist" text/code blocks unless the user explicitly asks for a directory tree.
+
 [코드 생성 정교화 규칙]
 - 명세의 각 feature와 acceptance_criteria를 코드에 빠짐없이 연결하세요. UI 텍스트, 이벤트 핸들러, 상태 변수, 렌더링 결과 중 하나로 반드시 드러나야 합니다.
 - HTML/CSS/JS 프로젝트는 파일 참조가 서로 맞아야 합니다. index.html에서 style.css와 script.js를 참조하거나, 단일 HTML이면 style/script를 내부에 포함하세요.
 - 생성 코드에서 https://cdn.tailwindcss.com 을 사용하지 마세요. Vanilla HTML/CSS는 직접 CSS를 작성하고, React에서 Tailwind가 꼭 필요할 때만 package.json dependencies에 포함하세요.
-- React 프로젝트는 package.json, index.html, src/main.jsx, src/App.jsx를 기본으로 하고, 컴포넌트가 늘어나면 명확한 파일 경로로 분리하세요.
+- React 프로젝트의 파일 구조는 반드시 다음을 그대로 따르세요:
+  - 엔트리: `src/main.jsx` (`import React from 'react'; import ReactDOM from 'react-dom/client'; import App from './App'; ReactDOM.createRoot(document.getElementById('root')).render(<App />);`)
+  - 루트 컴포넌트: `src/App.jsx` (`export default function App() { ... }`)
+  - 추가 컴포넌트는 `src/components/<Name>.jsx`, 컨텍스트는 `src/context/<Name>.jsx` 같은 일관된 경로로 분리.
+- React 코드는 ESM 만 사용하세요. `import` / `export` 만 쓰고, `require()` / `module.exports` / `exports.X = ...` 같은 CommonJS 표현을 섞지 마세요.
+- 모든 import 의 대상 파일은 spec.files 배열에 존재해야 합니다. 존재하지 않는 파일(`./index.css`, `./styles`, `./assets/...` 등)을 import 하지 마세요. 스타일이 필요하면 같은 spec 에 그 파일을 포함하거나 인라인 `<style>` 또는 컴포넌트 내부 `style` prop 으로 처리하세요.
+- 컴포넌트는 가능하면 `export default`로 한 개씩 내보내고, 호출 측에서는 `import Name from './path'` 형태로 받으세요. 같은 파일에서 여러 개를 내보내야 하면 `export { A, B }`로 명시적으로 named export 로 통일하세요.
+- 부모가 넘기는 prop 이름과 자식이 받는 prop 이름을 반드시 맞추세요. 예: 자식이 `onReviewSubmit`을 받으면 부모도 `onReviewSubmit={handleReviewSubmit}`로 전달해야 합니다.
+- JSX에서 호출하는 함수와 렌더링하는 컴포넌트는 반드시 실제 정의 또는 import가 있어야 합니다. `validateForm()`처럼 만들지 않은 함수를 호출하거나, import 없는 `<ReviewForm />`을 쓰지 마세요.
 - 외부 npm 패키지는 꼭 필요한 경우에만 쓰고, 쓰는 경우 package.json dependencies에 포함하세요. 아이콘 정도는 CSS/텍스트/간단한 SVG로 대체 가능한지 먼저 판단하세요.
 - 코드블록의 언어명은 반드시 파일 경로로 쓰세요. 예: ```index.html, ```style.css, ```script.js, ```src/App.jsx.
 - 긴 설명보다 완성도 높은 실행 코드를 우선하세요. 빈 함수, TODO, 임시 더미, “여기에 구현” 같은 문구는 출력하지 마세요.

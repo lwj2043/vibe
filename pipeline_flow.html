@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>파이프라인 흐름도</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 48px 32px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #94a3b8;
+      margin-bottom: 48px;
+      letter-spacing: 0.04em;
+      text-align: center;
+    }
+
+    /* ── 흐름 전체 컨테이너 ── */
+    .flow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 560px;
+      gap: 0;
+    }
+
+    /* ── 공통 박스 ── */
+    .box {
+      width: 100%;
+      border-radius: 16px;
+      padding: 20px 28px;
+      text-align: center;
+    }
+
+    .box-icon {
+      font-size: 1.8rem;
+      margin-bottom: 6px;
+    }
+
+    .box-label {
+      font-size: 1.2rem;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .box-hint {
+      font-size: 0.85rem;
+      margin-top: 6px;
+      opacity: 0.7;
+      line-height: 1.5;
+    }
+
+    /* 색상 */
+    .blue  { background: #0f2744; border: 2px solid #3b82f6; }
+    .blue  .box-label { color: #93c5fd; }
+
+    .purple { background: #1c1533; border: 2px solid #8b5cf6; }
+    .purple .box-label { color: #c4b5fd; }
+
+    .yellow { background: #1f1509; border: 2px solid #f59e0b; }
+    .yellow .box-label { color: #fcd34d; }
+
+    .cyan  { background: #081a26; border: 2px solid #06b6d4; }
+    .cyan  .box-label { color: #67e8f9; }
+
+    .green { background: #0a1f10; border: 2px solid #22c55e; }
+    .green .box-label { color: #86efac; }
+
+    /* ── 화살표 ── */
+    .arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 4px 0;
+    }
+
+    .arrow-line {
+      width: 2px;
+      height: 24px;
+      background: #334155;
+    }
+
+    .arrow-tip {
+      width: 0;
+      height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 9px solid #334155;
+    }
+
+    /* ── 분기 영역 ── */
+    .split-arrow {
+      width: 100%;
+      height: 48px;
+      position: relative;
+    }
+
+    .split-arrow svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .branches {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .branch {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+    }
+
+    /* 분기 레이블 */
+    .branch-label {
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 4px 14px;
+      border-radius: 20px;
+      margin-bottom: 10px;
+      letter-spacing: 0.03em;
+    }
+
+    .label-simple  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+    .label-complex { background: #431407; color: #fb923c; border: 1px solid #7c2d12; }
+
+    /* 중간 화살표 (좁은 경로용) */
+    .arrow-sm {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .arrow-sm .line { width: 2px; height: 16px; background: #334155; }
+    .arrow-sm .tip {
+      width: 0; height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 8px solid #334155;
+    }
+
+    /* ── 합류 화살표 ── */
+    .merge-arrow {
+      width: 100%;
+      height: 48px;
+    }
+
+    .merge-arrow svg { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+
+<h1>사용자 요청 → 코드 생성까지의 처리 흐름</h1>
+
+<div class="flow">
+
+  <!-- 사용자 메시지 -->
+  <div class="box blue">
+    <div class="box-icon">💬</div>
+    <div class="box-label">사용자 메시지</div>
+    <div class="box-hint">자연어로 원하는 것을 입력</div>
+  </div>
+
+  <!-- ↓ -->
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-tip"></div></div>
+
+  <!-- 요청 분석 -->
+  <div class="box purple">
+    <div class="box-icon">🔍</div>
+    <div class="box-label">요청 분석</div>
+    <div class="box-hint">단순한 요청인가, 복잡한 요청인가?</div>
+  </div>
+
+  <!-- 분기 화살표 -->
+  <div class="split-arrow">
+    <svg viewBox="0 0 560 48" preserveAspectRatio="none">
+      <line x1="280" y1="0"  x2="280" y2="16" stroke="#334155" stroke-width="2"/>
+      <line x1="140" y1="16" x2="420" y2="16" stroke="#334155" stroke-width="2"/>
+      <line x1="140" y1="16" x2="140" y2="38" stroke="#334155" stroke-width="2"/>
+      <polygon points="133,38 147,38 140,46" fill="#334155"/>
+      <line x1="420" y1="16" x2="420" y2="38" stroke="#334155" stroke-width="2"/>
+      <polygon points="413,38 427,38 420,46" fill="#334155"/>
+    </svg>
+  </div>
+
+  <!-- 두 경로 -->
+  <div class="branches">
+
+    <!-- 왼쪽: 단순 -->
+    <div class="branch">
+      <span class="branch-label label-simple">단순 요청</span>
+
+      <div class="box cyan" style="width:100%;">
+        <div class="box-icon">💻</div>
+        <div class="box-label">코딩 AI</div>
+        <div class="box-hint">바로 코드 작성</div>
+      </div>
+
+      <!-- 아래 여백 (오른쪽 경로와 높이 맞추기) -->
+      <div style="flex:1;"></div>
+    </div>
+
+    <!-- 오른쪽: 복잡 -->
+    <div class="branch">
+      <span class="branch-label label-complex">복잡 요청</span>
+
+      <div class="box yellow" style="width:100%;">
+        <div class="box-icon">📋</div>
+        <div class="box-label">계획 AI</div>
+        <div class="box-hint">설계도(명세) 먼저 작성</div>
+      </div>
+
+      <div class="arrow-sm">
+        <div class="line"></div>
+        <div class="tip"></div>
+      </div>
+
+      <div class="box cyan" style="width:100%;">
+        <div class="box-icon">💻</div>
+        <div class="box-label">코딩 AI</div>
+        <div class="box-hint">설계도 보고 코드 작성</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 합류 화살표 -->
+  <div class="merge-arrow">
+    <svg viewBox="0 0 560 48" preserveAspectRatio="none">
+      <line x1="140" y1="0"  x2="140" y2="32" stroke="#334155" stroke-width="2"/>
+      <line x1="140" y1="32" x2="280" y2="32" stroke="#334155" stroke-width="2"/>
+      <line x1="420" y1="0"  x2="420" y2="32" stroke="#334155" stroke-width="2"/>
+      <line x1="420" y1="32" x2="280" y2="32" stroke="#334155" stroke-width="2"/>
+      <line x1="280" y1="32" x2="280" y2="40" stroke="#334155" stroke-width="2"/>
+      <polygon points="273,40 287,40 280,48" fill="#334155"/>
+    </svg>
+  </div>
+
+  <!-- 최종 출력 -->
+  <div class="box green">
+    <div class="box-icon">✅</div>
+    <div class="box-label">코드 출력</div>
+    <div class="box-hint">실시간으로 화면에 표시</div>
+  </div>
+
+</div>
+
+</body>
+</html>

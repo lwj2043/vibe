@@ -28,20 +28,51 @@
   }
   try { Object.defineProperty(window, 'localStorage', { value: makeStorage(), configurable: true }); } catch (e) {}
   try { Object.defineProperty(window, 'sessionStorage', { value: makeStorage(), configurable: true }); } catch (e) {}
+
+  // 링크 클릭 시 서버로 이동 차단 (해시/앵커 제외)
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest('a[href]');
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (href.startsWith('#') || href.startsWith('javascript:')) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  // 폼 제출로 인한 이동 차단
+  document.addEventListener('submit', function(e) {
+    var action = (e.target.action || '');
+    if (!action || action.startsWith('#') || action.startsWith('javascript:')) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  // window.location.assign / replace 차단
+  try {
+    ['assign', 'replace'].forEach(function(m) {
+      try { window.location[m] = function(url) {
+        if (url && String(url).startsWith('#')) window.location.hash = url;
+      }; } catch(_) {}
+    });
+  } catch(_) {}
+
+  // window.open 차단
+  window.open = function() { return null; };
 })();
 <\/script>`;
   }
 
   function injectPreviewSandboxBootstrap(html) {
     const boot = previewSandboxBootstrapScript();
+    const base = '<base target="_blank">';
     const doc = String(html || '');
     if (/<head\b[^>]*>/i.test(doc)) {
-      return doc.replace(/<head\b([^>]*)>/i, `<head$1>\n${boot}`);
+      return doc.replace(/<head\b([^>]*)>/i, `<head$1>\n${base}\n${boot}`);
     }
     if (/<html\b[^>]*>/i.test(doc)) {
-      return doc.replace(/<html\b([^>]*)>/i, `<html$1>\n<head>${boot}</head>`);
+      return doc.replace(/<html\b([^>]*)>/i, `<html$1>\n<head>${base}\n${boot}</head>`);
     }
-    return `${boot}\n${doc}`;
+    return `${base}\n${boot}\n${doc}`;
   }
 
   function normalizeAssetRef(ref) {

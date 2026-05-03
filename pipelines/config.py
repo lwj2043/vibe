@@ -4,9 +4,13 @@
 환경변수 매핑:
     api_key       → VIBE_API_KEY (or API_KEY)
     coder_api_key → VIBE_CODER_API_KEY
+    ollama_url    → VIBE_OLLAMA_URL (or OLLAMA_URL)
+    keep_alive    → VIBE_OLLAMA_KEEP_ALIVE (or OLLAMA_KEEP_ALIVE)
     base_url      → VIBE_BASE_URL
     coder_base_url→ VIBE_CODER_BASE_URL
     model         → VIBE_MODEL
+    plan_model    → VIBE_PLAN_MODEL
+    dev_model     → VIBE_DEV_MODEL
     coder_model   → VIBE_CODER_MODEL
 """
 
@@ -24,9 +28,14 @@ SPECS_ROOT = Path(__file__).resolve().parent.parent / "specs"
 _ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "api_key": ("VIBE_API_KEY", "API_KEY"),
     "coder_api_key": ("VIBE_CODER_API_KEY",),
+    "ollama_url": ("VIBE_OLLAMA_URL", "OLLAMA_URL"),
+    "keep_alive": ("VIBE_OLLAMA_KEEP_ALIVE", "OLLAMA_KEEP_ALIVE"),
+    "ollama_keep_alive": ("VIBE_OLLAMA_KEEP_ALIVE", "OLLAMA_KEEP_ALIVE"),
     "base_url": ("VIBE_BASE_URL",),
     "coder_base_url": ("VIBE_CODER_BASE_URL",),
     "model": ("VIBE_MODEL",),
+    "plan_model": ("VIBE_PLAN_MODEL",),
+    "dev_model": ("VIBE_DEV_MODEL",),
     "coder_model": ("VIBE_CODER_MODEL",),
 }
 

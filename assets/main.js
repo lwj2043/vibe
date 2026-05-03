@@ -455,9 +455,9 @@ function renderMessage(msg, index) {
     parsed.codeBlocks.forEach((cb, i) => {
       const marker = content.querySelector(`[data-code-marker="${i}"]`);
       if (marker) {
-        marker.replaceWith(createCodeBlock(cb.code, cb.lang));
+        marker.replaceWith(createCodeBlock(cb.code, cb.lang, cb));
       } else {
-        content.appendChild(createCodeBlock(cb.code, cb.lang));
+        content.appendChild(createCodeBlock(cb.code, cb.lang, cb));
       }
     });
     refreshCombinedPreviewButton(content);
@@ -612,9 +612,10 @@ function parseMarkdown(text) {
   // Normalize line endings
   text = text.replace(/\r\n/g, '\n');
   // Extract fenced code blocks (handle language + optional extra text on first line)
-  text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, firstLine, code) => {
-    const lang = firstLine.trim().split(/\s/)[0] || 'text';
-    codeBlocks.push({ lang, code: code.trimEnd() });
+  text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (match, firstLine, code, offset, fullText) => {
+    const before = fullText.slice(Math.max(0, offset - 900), offset);
+    const info = parseCodeFenceInfo(firstLine, code, before);
+    codeBlocks.push({ lang: info.lang, path: info.path, code: code.trimEnd() });
     return `\u0000CODE_${codeBlocks.length - 1}\u0000`;
   });
   // Escape
@@ -674,7 +675,113 @@ function resolveLang(lang) {
   return l;
 }
 
-function createCodeBlock(code, lang) {
+function isPreviewFilePath(path) {
+  const p = normalizePreviewPath(path);
+  return /^[A-Za-z0-9_./@-]+\.(html?|css|jsx?|tsx?|mjs|cjs|json)$/i.test(p)
+    && !/^https?:\/\//i.test(p);
+}
+
+function findPreviewPathInText(text) {
+  const matches = [];
+  const re = /(?:^|[\s`"'(\[{<])([A-Za-z0-9_./@-]+\.(?:html?|css|jsx?|tsx?|mjs|cjs|json))(?=$|[\s`"',)\]}>:])/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const path = normalizePreviewPath(m[1]);
+    if (isPreviewFilePath(path)) matches.push(path);
+  }
+  return matches.length ? matches[matches.length - 1] : '';
+}
+
+function findImmediatePreviewPath(beforeText) {
+  const lines = String(beforeText || '').split(/\n/).map(l => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i--) {
+    const line = lines[i]
+      .replace(/^#+\s*/, '')
+      .replace(/^[-*]\s*/, '')
+      .replace(/^\d+\.\s*/, '')
+      .replace(/^\*\*(.*?)\*\*:?$/, '$1')
+      .replace(/^`([^`]+)`:?$/, '$1')
+      .trim();
+    if (/^(?:file|filename|path|filepath|파일|파일명|경로)\s*:/i.test(line) || isPreviewFilePath(line)) {
+      const path = findPreviewPathInText(line);
+      if (path) return path;
+    }
+  }
+  return '';
+}
+
+function shortPreviewHash(value) {
+  let hash = 0;
+  const src = String(value || '');
+  for (let i = 0; i < src.length; i++) {
+    hash = ((hash << 5) - hash + src.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36).slice(0, 5) || 'file';
+}
+
+function getDeclaredReactName(content) {
+  const src = String(content || '');
+  const patterns = [
+    /\bexport\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)\b/,
+    /\bexport\s+default\s+class\s+([A-Z][A-Za-z0-9_]*)\b/,
+    /\bexport\s+default\s+([A-Z][A-Za-z0-9_]*)\b/,
+    /\bexport\s+(?:const|let|var)\s+([A-Z][A-Za-z0-9_]*)\s*=/,
+    /\bexport\s+function\s+([A-Z][A-Za-z0-9_]*)\s*\(/,
+    /\bfunction\s+([A-Z][A-Za-z0-9_]*)\s*\(/,
+    /\bconst\s+([A-Z][A-Za-z0-9_]*)\s*=/,
+    /\bclass\s+([A-Z][A-Za-z0-9_]*)\s+extends\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = src.match(pattern);
+    if (match && match[1]) return match[1];
+  }
+  return '';
+}
+
+function normalizeInferredPreviewPath(path, content, lang) {
+  let p = normalizePreviewPath(path);
+  if (!isPreviewFilePath(p)) return '';
+  p = denumberPreviewPath(p, content, lang);
+  const isReact = looksLikeReactSource(content) || ['jsx', 'tsx'].includes(resolveLang(lang));
+  if (isReact && !p.includes('/')) p = `src/${p}`;
+  if (isReact && /^(components|pages|context|hooks|layouts|utils)\//i.test(p)) p = `src/${p}`;
+  return p;
+}
+
+function hasNumberOnlySuffixPath(path) {
+  const name = (normalizePreviewPath(path).split('/').pop() || '');
+  return /^[A-Za-z_$][A-Za-z0-9_$]*-\d+\.(?:html?|css|jsx?|tsx?|mjs|cjs|json)$/i.test(name);
+}
+
+function denumberPreviewPath(path, content, lang) {
+  const p = normalizePreviewPath(path);
+  if (!hasNumberOnlySuffixPath(p)) return p;
+  const resolved = resolveLang(lang || p);
+  if (isReactEntrySource(content)) {
+    return resolved === 'tsx' || /\.tsx$/i.test(p) ? 'src/main.tsx' : 'src/main.jsx';
+  }
+  return semanticPreviewFallbackPath(p, content, lang);
+}
+
+function parseCodeFenceInfo(firstLine, code, beforeText = '') {
+  const raw = String(firstLine || '').trim();
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  let path = findPreviewPathInText(raw);
+  let lang = tokens[0] || 'text';
+  if (path) {
+    lang = isPreviewFilePath(tokens[0]) ? resolveLang(path) : tokens[0];
+  } else {
+    path = findImmediatePreviewPath(beforeText);
+  }
+  path = normalizeInferredPreviewPath(path, code, lang);
+  if (!path) path = defaultPreviewPathFromLang(lang, {}, code);
+  if (path && isPreviewFilePath(path)) lang = path;
+  return { lang, path };
+}
+
+function createCodeBlock(code, lang, meta = {}) {
+  const displayLang = meta.path || lang;
+  const displayLabel = escapeHtml(displayLang);
   const resolvedLang = resolveLang(lang);
   // Mermaid 다이어그램 — code-block 대신 렌더용 컨테이너 반환
   if (resolvedLang === 'mermaid' || (lang || '').toLowerCase() === 'mermaid') {
@@ -688,10 +795,11 @@ function createCodeBlock(code, lang) {
   const div = document.createElement('div');
   div.className = 'code-block';
   div.dataset.code = code;
-  div.dataset.lang = lang;
+  div.dataset.lang = displayLang;
+  div.dataset.originalLang = lang || '';
   div.innerHTML = `
     <div class="code-header">
-      <span class="code-lang">${lang}</span>
+      <span class="code-lang">${displayLabel}</span>
       <div class="code-actions">
         ${isPreviewable ? `<button class="code-btn preview-btn">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -703,14 +811,14 @@ function createCodeBlock(code, lang) {
         </button>
       </div>
     </div>
-    <div class="code-content">${highlightCode(code, lang)}</div>`;
+    <div class="code-content">${highlightCode(code, displayLang)}</div>`;
   const actionsEl = div.querySelector('.code-actions');
   const headerEl = div.querySelector('.code-header');
   if (actionsEl && headerEl) {
     headerEl.insertAdjacentElement('afterend', actionsEl);
   }
   if (isPreviewable) {
-    div.querySelector('.preview-btn').onclick = () => openPreview(code, resolvedLang, div, lang);
+    div.querySelector('.preview-btn').onclick = () => openPreview(code, resolvedLang, div, displayLang);
   }
   div.querySelector('.copy-code-btn').onclick = (e) => {
     copyText(code);
@@ -778,31 +886,159 @@ let currentPreviewFiles = {};
 let currentPreviewEntryPath = '';
 let currentPreviewPrebuilt = null; // { extraFiles, bareMap, compiledSet } | null
 
-function defaultPreviewPathFromLang(lang, files) {
+function normalizePreviewPath(path) {
+  return String(path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function inferPreviewPathFromCode(content) {
+  const head = String(content || '').split(/\n/).slice(0, 6).join('\n');
+  const match = head.match(/(?:^|\n)\s*(?:(?:\/\/|#|<!--|\/\*)\s*)?(?:file|filename|path|filepath|파일|파일명|경로)?\s*:?\s*([A-Za-z0-9_./@-]+\.(?:html?|css|jsx?|tsx?|mjs|cjs|json))\s*(?:-->| \*\/)?/i);
+  return match ? normalizePreviewPath(match[1]) : '';
+}
+
+function looksLikeReactSource(content) {
+  const src = String(content || '');
+  return /\b(?:createRoot|ReactDOM\.render)\s*\(/.test(src)
+    || /\bfrom\s+['"]react(?:\/[^'"]*)?['"]/.test(src)
+    || /\brequire\s*\(\s*['"]react(?:\/[^'"]*)?['"]\s*\)/.test(src)
+    || /\b(?:useState|useEffect|useMemo|useCallback|createContext|useContext)\s*\(/.test(src)
+    || /\bexport\s+default\s+(?:function\s+)?[A-Z][A-Za-z0-9_]*/.test(src)
+    || /return\s*\(\s*<[A-Za-z]/.test(src)
+    || /=>\s*\(\s*<[A-Za-z]/.test(src);
+}
+
+function isReactEntrySource(content) {
+  return /\b(?:createRoot|ReactDOM\.render)\s*\(/.test(String(content || ''));
+}
+
+function inferReactComponentPath(content, ext) {
+  const src = String(content || '');
+  const patterns = [
+    /\bexport\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)\b/,
+    /\bexport\s+default\s+([A-Z][A-Za-z0-9_]*)\b/,
+    /\bfunction\s+(App)\s*\(/,
+    /\bconst\s+(App)\s*=/,
+    /\bclass\s+(App)\s+extends\b/,
+    /\bfunction\s+([A-Z][A-Za-z0-9_]*)\s*\(/,
+    /\bconst\s+([A-Z][A-Za-z0-9_]*)\s*=/,
+    /\bclass\s+([A-Z][A-Za-z0-9_]*)\s+extends\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = src.match(pattern);
+    if (match && match[1]) return `src/${match[1]}.${ext}`;
+  }
+  return '';
+}
+
+function isReactPreviewPath(path, content) {
+  const p = String(path || '');
+  return /\.(jsx|tsx)$/i.test(p)
+    || (/\.(m?js|ts)$/i.test(p) && looksLikeReactSource(content));
+}
+
+function hasReactPreviewFiles(files) {
+  return Object.keys(files || {}).some(p => isReactPreviewPath(p, files[p]));
+}
+
+function defaultPreviewPathFromLang(lang, files, content = '') {
   const raw = (lang || '').trim();
-  if (raw && raw.includes('.')) return raw;
+  if (raw && raw.includes('.')) return normalizePreviewPath(raw);
+  const hintedPath = inferPreviewPathFromCode(content);
+  if (hintedPath) return hintedPath;
   const resolved = resolveLang(raw);
-  const base = ({
+  let base = ({
     html: 'index.html',
     css: 'style.css',
     javascript: 'script.js',
     jsx: 'src/App.jsx',
     tsx: 'src/App.tsx',
   })[resolved];
+  if (resolved === 'jsx' || resolved === 'tsx') {
+    const ext = resolved === 'tsx' ? 'tsx' : 'jsx';
+    base = isReactEntrySource(content)
+      ? `src/main.${ext}`
+      : inferReactComponentPath(content, ext) || base;
+  } else if (resolved === 'javascript' && looksLikeReactSource(content)) {
+    base = isReactEntrySource(content)
+      ? 'src/main.jsx'
+      : inferReactComponentPath(content, 'jsx') || 'src/App.jsx';
+  }
   if (!base) return '';
-  if (!files || !files[base]) return base;
-  const dot = base.lastIndexOf('.');
-  const stem = dot >= 0 ? base.slice(0, dot) : base;
-  const ext = dot >= 0 ? base.slice(dot) : '';
-  let i = 2;
-  while (files[`${stem}-${i}${ext}`]) i++;
-  return `${stem}-${i}${ext}`;
+  return base;
+}
+
+function inferPlainJsName(content) {
+  const src = String(content || '');
+  const patterns = [
+    /\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/,
+    /\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=/,
+    /\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = src.match(pattern);
+    if (match && match[1]) return match[1];
+  }
+  return '';
+}
+
+function semanticPreviewFallbackPath(base, content, lang) {
+  const path = normalizePreviewPath(base);
+  const dot = path.lastIndexOf('.');
+  const ext = dot >= 0 ? path.slice(dot) : '';
+  const hash = shortPreviewHash(content);
+  const resolved = resolveLang(lang || path);
+  if (isReactPreviewPath(path, content) || ['jsx', 'tsx'].includes(resolved)) {
+    const componentName = getDeclaredReactName(content);
+    const fileExt = /\.tsx$/i.test(path) || resolved === 'tsx' ? '.tsx' : '.jsx';
+    if (componentName) return `src/${componentName}${fileExt}`;
+    if (isReactEntrySource(content)) return `src/main-${hash}${fileExt}`;
+    return `src/GeneratedComponent-${hash}${fileExt}`;
+  }
+  if (/\.css$/i.test(path)) return `style-${hash}.css`;
+  if (/\.html?$/i.test(path)) return `index-${hash}.html`;
+  if (/\.(m?js|cjs)$/i.test(path) || resolved === 'javascript') {
+    const name = inferPlainJsName(content);
+    return name ? `script-${name}.js` : `script-${hash}.js`;
+  }
+  return `file-${hash}${ext || '.txt'}`;
+}
+
+function finalizePreviewPath(base, files, content, lang) {
+  let path = normalizePreviewPath(base);
+  if (!path) return '';
+  path = denumberPreviewPath(path, content, lang);
+  const declaredReactName = getDeclaredReactName(content);
+  const resolved = resolveLang(lang || path);
+  if (!isReactEntrySource(content) && declaredReactName && isReactPreviewPath(path, content)) {
+    const currentName = (path.split('/').pop() || '').replace(/\.(jsx|tsx|js|ts)$/i, '');
+    if (currentName !== declaredReactName) {
+      const fileExt = /\.tsx$/i.test(path) || resolved === 'tsx' ? '.tsx' : '.jsx';
+      path = `src/${declaredReactName}${fileExt}`;
+    }
+  }
+  if (looksLikeReactSource(content) && /^script(?:-[a-z0-9_]+)?\.(js|mjs|cjs)$/i.test(path)) {
+    path = semanticPreviewFallbackPath(path, content, lang);
+  }
+  if (!files || !Object.prototype.hasOwnProperty.call(files, path)) return path;
+  if (String(files[path] || '') === String(content || '')) return path;
+
+  path = semanticPreviewFallbackPath(path, content, lang);
+  if (!files || !Object.prototype.hasOwnProperty.call(files, path)) return path;
+  if (String(files[path] || '') === String(content || '')) return path;
+
+  const dot = path.lastIndexOf('.');
+  const stem = dot >= 0 ? path.slice(0, dot) : path;
+  const ext = dot >= 0 ? path.slice(dot) : '';
+  const hash = shortPreviewHash(`${path}\n${content}`);
+  return `${stem}-${hash}${ext}`;
 }
 
 function addPreviewFile(files, lang, content) {
   if (!content) return;
-  const path = defaultPreviewPathFromLang(lang, files);
+  const base = defaultPreviewPathFromLang(lang, files, content);
+  const path = finalizePreviewPath(base, files, content, lang);
   if (path) files[path] = content;
+  return path;
 }
 
 function previewSandboxBootstrapScript() {
@@ -849,7 +1085,8 @@ function gatherSiblingFiles(triggerEl) {
       blocks.forEach(blk => {
         const path = blk.dataset.lang || '';
         const content = blk.dataset.code || '';
-        addPreviewFile(files, path, content);
+        const finalPath = addPreviewFile(files, path, content);
+        if (finalPath) blk.dataset.lang = finalPath;
       });
       if (blocks.length >= 1) break;
     }
@@ -1079,7 +1316,7 @@ function pickHtmlEntryPath(files, preferredPath) {
 
 function pickPreviewEntryPath(files, preferredPath, activePath) {
   const paths = Object.keys(files || {});
-  const hasReact = paths.some(p => /\.(jsx|tsx)$/i.test(p));
+  const hasReact = paths.some(p => isReactPreviewPath(p, files[p]));
   if (hasReact) return pickReactEntryPath(files, preferredPath);
   const htmlEntry = pickHtmlEntryPath(files, preferredPath);
   if (htmlEntry) return htmlEntry;
@@ -1164,7 +1401,7 @@ function mountPreviewSrcdoc(srcdoc) {
 
 async function buildPreviewSrcdocFromFiles(files, preferredEntry = '', activePath = '') {
   const entry = pickPreviewEntryPath(files, preferredEntry, activePath);
-  const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
+  const hasReact = hasReactPreviewFiles(files);
   if (hasReact) {
     const prebuilt = await prefetchBareDeps(files);
     currentPreviewPrebuilt = prebuilt;
@@ -1214,8 +1451,11 @@ async function openPreview(code, lang = 'html', triggerEl = null, originalLang =
   let files = currentPreviewFiles;
   let entry = currentPreviewEntryPath;
   if (!files || !Object.keys(files).length) {
+    const inferredPath = defaultPreviewPathFromLang(entry || currentPreviewLang, {}, code);
     const fname = (entry && entry.includes('.'))
-      ? entry
+      ? normalizePreviewPath(entry)
+      : inferredPath
+        ? inferredPath
       : `index.${currentPreviewLang === 'jsx' ? 'jsx'
           : currentPreviewLang === 'css' ? 'css'
           : currentPreviewLang === 'javascript' ? 'js' : 'html'}`;
@@ -1242,7 +1482,7 @@ async function openPreview(code, lang = 'html', triggerEl = null, originalLang =
     }
   });
   // React 멀티파일이면 부모에서 npm 의존성 미리 컴파일
-  const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
+  const hasReact = hasReactPreviewFiles(files);
   if (hasReact) {
     currentPreviewPrebuilt = await prefetchBareDeps(files);
   } else {
@@ -1308,7 +1548,7 @@ function toggleInlineSim(codeBlockEl, code, resolvedLang, originalLang) {
   currentPreviewEntryPath = originalLang || '';
   const entry = pickPreviewEntryPath(
     currentPreviewFiles,
-    defaultPreviewPathFromLang(originalLang || resolvedLang, currentPreviewFiles),
+    defaultPreviewPathFromLang(originalLang || resolvedLang, currentPreviewFiles, code),
     ''
   );
   const srcdoc = /\.(html?|htm)$/i.test(entry || '')
@@ -1418,13 +1658,308 @@ ${tailwindScript}
   const __compiledSet = new Set(${JSON.stringify((prebuilt && prebuilt.compiledSet) || [])}); // Babel 건너뛸 가상파일
   const __reactExports = Object.assign({ default: React, __esModule: true }, React);
   const __reactDomExports = Object.assign({ default: ReactDOM, __esModule: true }, ReactDOM);
+  function __previewEscape(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+  function __showPreviewError(error) {
+    const root = document.getElementById('root');
+    if (!root) return;
+    function koMessage(message) {
+      message = String(message || '알 수 없는 미리보기 오류입니다.');
+      let m = message.match(/([A-Z][A-Za-z0-9_]*) is not defined/);
+      if (m) return '컴포넌트 또는 변수 "' + m[1] + '"가 정의되지 않았습니다. 해당 컴포넌트를 import 하거나 같은 파일에서 정의해야 합니다.';
+      m = message.match(/([A-Za-z_$][A-Za-z0-9_$]*) is not a function/);
+      if (m) return '"' + m[1] + '"를 함수처럼 호출했지만 실제로는 함수가 아닙니다. 부모에서 넘기는 prop 이름과 자식 컴포넌트가 받는 prop 이름이 같은지 확인해야 합니다.';
+      m = message.match(/Cannot read properties of undefined \(reading ['"]([^'"]+)['"]\)/);
+      if (m) return '정의되지 않은 값에서 "' + m[1] + '" 속성을 읽으려고 했습니다. 초기값 또는 props 전달이 누락됐을 가능성이 큽니다.';
+      if (/Self import detected/i.test(message)) return '컴포넌트가 자기 자신을 import 하고 있습니다. React 엔트리는 src/main.jsx, 루트 컴포넌트는 src/App.jsx로 분리해야 합니다.';
+      m = message.match(/Module not found: ([^\\s]+)/);
+      if (m) return '모듈을 찾을 수 없습니다: ' + m[1] + '. import 경로와 파일명이 일치하는지 확인해야 합니다.';
+      if (/Expected corresponding JSX closing tag/i.test(message)) return 'JSX 태그가 올바르게 닫히지 않았습니다. 여는 태그와 닫는 태그를 맞춰야 합니다.';
+      if (/Element type is invalid/i.test(message)) return 'React 컴포넌트가 올바르게 연결되지 않았습니다. import/export가 맞지 않을 가능성이 큽니다.';
+      return message;
+    }
+    const message = koMessage(error && error.message ? error.message : String(error || 'Unknown preview error'));
+    const rawStack = error && error.stack ? String(error.stack) : '';
+    const stack = rawStack ? '\\n\\n원본 오류:\\n' + rawStack.split('\\n').slice(0, 4).join('\\n') : '';
+    root.innerHTML = '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">' +
+      __previewEscape(message + stack) + '</pre>';
+  }
+  window.addEventListener('error', function(event) {
+    __showPreviewError(event && (event.error || event.message));
+    if (event && event.preventDefault) event.preventDefault();
+  });
+  window.addEventListener('unhandledrejection', function(event) {
+    __showPreviewError(event && event.reason);
+    if (event && event.preventDefault) event.preventDefault();
+  });
+  function __makeIcon(name) {
+    return function VibePreviewIcon(props) {
+      props = props || {};
+      const size = props.size || 20;
+      return React.createElement('svg', {
+        viewBox: '0 0 24 24',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: props.color || 'currentColor',
+        strokeWidth: props.strokeWidth || 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        className: props.className,
+        style: props.style,
+        role: 'img',
+        'aria-label': name
+      }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }),
+         React.createElement('path', { d: 'M8 12h8M12 8v8' }));
+    };
+  }
+  const __lucideReactExports = new Proxy({ __esModule: true }, {
+    get(target, prop) {
+      if (prop === 'default') return target;
+      if (prop === '__esModule') return true;
+      if (typeof prop !== 'string') return target[prop];
+      if (!target[prop]) target[prop] = __makeIcon(prop);
+      return target[prop];
+    }
+  });
+  const __framerMotionExports = {
+    __esModule: true,
+    motion: new Proxy({}, { get: function(_target, tag) { return String(tag); } }),
+    AnimatePresence: function AnimatePresence(props) {
+      return React.createElement(React.Fragment, null, props && props.children);
+    }
+  };
+  function __RouterShell(props) {
+    return React.createElement(React.Fragment, null, props && props.children);
+  }
+  function __RouteShell(props) {
+    return props && (props.element || props.children || null);
+  }
+  function __LinkShell(props) {
+    props = props || {};
+    const next = Object.assign({}, props, {
+      href: props.to || props.href || '#',
+      onClick: function(event) {
+        if (event && event.preventDefault) event.preventDefault();
+        if (typeof props.onClick === 'function') props.onClick(event);
+      }
+    });
+    delete next.to;
+    delete next.end;
+    return React.createElement('a', next, props.children);
+  }
+  const __reactRouterDomExports = {
+    __esModule: true,
+    BrowserRouter: __RouterShell,
+    HashRouter: __RouterShell,
+    MemoryRouter: __RouterShell,
+    Routes: __RouterShell,
+    Route: __RouteShell,
+    Outlet: function Outlet() { return null; },
+    Link: __LinkShell,
+    NavLink: __LinkShell,
+    Navigate: function Navigate() { return null; },
+    useNavigate: function useNavigate() { return function() {}; },
+    useLocation: function useLocation() { return { pathname: '/', search: '', hash: '', state: null }; },
+    useParams: function useParams() { return {}; },
+    useSearchParams: function useSearchParams() { return [new URLSearchParams(), function() {}]; },
+  };
+  function __makeChartComponent(name) {
+    return function VibePreviewChartComponent(props) {
+      props = props || {};
+      const isContainer = name === 'ResponsiveContainer' || /Chart$/.test(name);
+      if (!isContainer) return React.createElement(React.Fragment, null, props.children || null);
+      return React.createElement('div', {
+        className: props.className,
+        style: Object.assign({
+          minHeight: props.height || 180,
+          width: props.width || '100%',
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          background: 'linear-gradient(135deg,#f8fafc,#eef2ff)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#64748b',
+          font: '12px ui-monospace,monospace'
+        }, props.style || {})
+      }, props.children || name);
+    };
+  }
+  const __rechartsExports = new Proxy({ __esModule: true }, {
+    get(target, prop) {
+      if (prop === 'default') return target;
+      if (prop === '__esModule') return true;
+      if (typeof prop !== 'string') return target[prop];
+      if (!target[prop]) target[prop] = __makeChartComponent(prop);
+      return target[prop];
+    }
+  });
   const __builtins = {
     'react': __reactExports,
     'react/jsx-runtime': __reactExports,
     'react/jsx-dev-runtime': __reactExports,
     'react-dom': __reactDomExports,
     'react-dom/client': __reactDomExports,
+    'lucide-react': __lucideReactExports,
+    'framer-motion': __framerMotionExports,
+    'react-router': __reactRouterDomExports,
+    'react-router-dom': __reactRouterDomExports,
+    'recharts': __rechartsExports,
   };
+
+  function __declaredNames(src) {
+    const names = new Set();
+    const patterns = [
+      /\\b(?:export\\s+default\\s+)?function\\s+([A-Z][A-Za-z0-9_]*)\\s*\\(/g,
+      /\\b(?:export\\s+)?(?:const|let|var)\\s+([A-Z][A-Za-z0-9_]*)\\s*=/g,
+      /\\b(?:export\\s+default\\s+)?class\\s+([A-Z][A-Za-z0-9_]*)\\b/g,
+    ];
+    for (const pattern of patterns) {
+      let m;
+      while ((m = pattern.exec(src))) names.add(m[1]);
+    }
+    return [...names];
+  }
+
+  function __importedLocalNames(src) {
+    const names = new Set();
+    const re = /\\bimport\\s+([^;\\n]+?)\\s+from\\s+['"][^'"]+['"]/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const clause = m[1].trim();
+      const def = clause.match(/^([A-Za-z_$][A-Za-z0-9_$]*)/);
+      if (def && def[1] !== 'type') names.add(def[1]);
+      const named = clause.match(/\\{([^}]+)\\}/);
+      if (named) {
+        named[1].split(',').forEach(part => {
+          const bits = part.trim().split(/\\s+as\\s+/i);
+          const local = (bits[1] || bits[0] || '').trim();
+          if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(local)) names.add(local);
+        });
+      }
+    }
+    return names;
+  }
+
+  function __jsxTags(src) {
+    const names = new Set();
+    const re = /<([A-Z][A-Za-z0-9_]*)(?=[\\s/>])/g;
+    let m;
+    while ((m = re.exec(src))) names.add(m[1]);
+    return [...names];
+  }
+
+  function __pathBaseName(path) {
+    return (String(path || '').split('/').pop() || '').replace(/\\.(jsx|tsx|js|ts)$/i, '');
+  }
+
+  function __componentNameForModule(path, src) {
+    const names = __declaredNames(src);
+    const base = __pathBaseName(path);
+    if (names.includes(base)) return base;
+    const exported = src.match(/\\bexport\\s+default\\s+([A-Z][A-Za-z0-9_]*)\\b/);
+    if (exported && names.includes(exported[1])) return exported[1];
+    return names[0] || (/^[A-Z]/.test(base) ? base : '');
+  }
+
+  function __componentPropNames(src) {
+    const names = new Set();
+    function addChunk(chunk) {
+      String(chunk || '').split(',').forEach(part => {
+        const name = part
+          .replace(/\\/\\/.*$/g, '')
+          .replace(/^\\.\\.\\./, '')
+          .split(':')[0]
+          .split('=')[0]
+          .trim();
+        if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) names.add(name);
+      });
+    }
+    const destructuredParams = /\\(\\s*\\{([^}]*)\\}\\s*(?:\\)|,)/g;
+    let m;
+    while ((m = destructuredParams.exec(src))) addChunk(m[1]);
+    const destructuredProps = /\\{([^}]+)\\}\\s*=\\s*props\\b/g;
+    while ((m = destructuredProps.exec(src))) addChunk(m[1]);
+    const propsAccess = /\\bprops\\.([A-Za-z_$][A-Za-z0-9_$]*)\\b/g;
+    while ((m = propsAccess.exec(src))) names.add(m[1]);
+    return [...names];
+  }
+
+  function __patchComponentPropAliases(src, tag, target) {
+    const targetProps = __componentPropNames(String(__files[target] || ''));
+    if (!targetProps.length) return src;
+    let patched = src;
+    const submitProp = targetProps.find(prop => prop !== 'onSubmit' && /^on[A-Z].*Submit$/.test(prop));
+    if (submitProp && !targetProps.includes('onSubmit')) {
+      const tagRe = new RegExp('(<'+ tag +'\\\\b[^>]*?)\\\\bonSubmit\\\\s*=', 'g');
+      patched = patched.replace(tagRe, function(all, prefix) {
+        if (new RegExp('\\\\b' + submitProp + '\\\\s*=').test(prefix)) return all;
+        return prefix + submitProp + '=';
+      });
+    }
+    return patched;
+  }
+
+  const __componentRegistry = {};
+  (function buildComponentRegistry() {
+    for (const path in __files) {
+      if (!/\\.(jsx|tsx|js|ts)$/i.test(path)) continue;
+      if (/(^|\\/)(main|index)\\.(jsx|tsx|js|ts)$/i.test(path)) continue;
+      const src = String(__files[path] || '');
+      const names = new Set(__declaredNames(src));
+      const base = __pathBaseName(path);
+      if (/^[A-Z][A-Za-z0-9_]*$/.test(base)) names.add(base);
+      names.forEach(name => {
+        if (!__componentRegistry[name] || path.includes('/components/')) {
+          __componentRegistry[name] = path;
+        }
+      });
+    }
+  })();
+
+  function __relativeImportPath(from, to) {
+    const fromParts = String(from || '').split('/').slice(0, -1);
+    const toParts = String(to || '').split('/');
+    while (fromParts.length && toParts.length && fromParts[0] === toParts[0]) {
+      fromParts.shift();
+      toParts.shift();
+    }
+    const prefix = fromParts.map(() => '..').concat(toParts).join('/');
+    const withoutExt = prefix.replace(/\\.(jsx|tsx|js|ts)$/i, '');
+    return withoutExt.startsWith('.') ? withoutExt : './' + withoutExt;
+  }
+
+  function __patchReactSource(src, resolved) {
+    if (!/\\.(jsx|tsx|js|ts)$/i.test(resolved)) return src;
+    let patched = String(src || '');
+    const declared = new Set(__declaredNames(patched));
+    const imported = __importedLocalNames(patched);
+    const autoImports = [];
+    for (const tag of __jsxTags(patched)) {
+      const target = __componentRegistry[tag];
+      if (!target || target === resolved) continue;
+      patched = __patchComponentPropAliases(patched, tag, target);
+      if (declared.has(tag) || imported.has(tag)) continue;
+      autoImports.push('import ' + tag + ' from ' + JSON.stringify(__relativeImportPath(resolved, target)) + ';');
+      imported.add(tag);
+    }
+    if (autoImports.length) patched = autoImports.join('\\n') + '\\n' + patched;
+
+    const hasDefaultExport = /\\bexport\\s+default\\b/.test(patched);
+    const isEntry = /(^|\\/)(main|index)\\.(jsx|tsx|js|ts)$/i.test(resolved) || /createRoot|ReactDOM\\.render/.test(patched);
+    if (!hasDefaultExport && !isEntry) {
+      const componentName = __componentNameForModule(resolved, patched);
+      if (componentName && new RegExp('\\\\b' + componentName + '\\\\b').test(patched)) {
+        patched += '\\n\\nexport default ' + componentName + ';';
+      }
+    }
+    return patched;
+  }
 
   // 모든 파일에서 bare 패키지 import 를 추출
   function collectBareSpecs() {
@@ -1503,6 +2038,18 @@ ${tailwindScript}
     if (__builtins[to]) return to;
     if (__bareMap[to]) return __bareMap[to];
     const fromDir = from ? from.split('/').slice(0, -1).join('/') : '';
+    let skippedSelfImport = false;
+    function isSelfImport(candidate) {
+      return !!(from && candidate && candidate.toLowerCase() === from.toLowerCase());
+    }
+    function acceptCandidate(candidate) {
+      if (!candidate || !__files[candidate]) return false;
+      if (isSelfImport(candidate)) {
+        skippedSelfImport = true;
+        return false;
+      }
+      return true;
+    }
     let abs;
     if (to.startsWith('./') || to.startsWith('../')) {
       const parts = (fromDir ? fromDir.split('/') : []).concat(to.split('/'));
@@ -1516,29 +2063,58 @@ ${tailwindScript}
     } else {
       abs = to;
     }
-    if (__files[abs]) return abs;
+    if (acceptCandidate(abs)) return abs;
     const exts = ['.jsx', '.tsx', '.js', '.ts', '.css',
                   '/index.jsx', '/index.tsx', '/index.js', '/index.ts'];
     for (const ext of exts) {
-      if (__files[abs + ext]) return abs + ext;
+      const candidate = abs + ext;
+      if (acceptCandidate(candidate)) return candidate;
     }
     // 케이스 무시 매칭 (모델이 대소문자를 섞어 내는 경우 대비)
     const lower = abs.toLowerCase();
     for (const key of Object.keys(__files)) {
-      if (key.toLowerCase() === lower) return key;
+      if (key.toLowerCase() === lower && !isSelfImport(key)) return key;
+      if (key.toLowerCase() === lower && isSelfImport(key)) skippedSelfImport = true;
       for (const ext of exts) {
-        if (key.toLowerCase() === lower + ext) return key;
+        if (key.toLowerCase() === lower + ext && !isSelfImport(key)) return key;
+        if (key.toLowerCase() === lower + ext && isSelfImport(key)) skippedSelfImport = true;
       }
+    }
+    // 마지막 폴백: basename 매칭 (모델이 './App' → 'src/App.jsx' 처럼 경로를 어긋나게 낸 경우 대비)
+    const fileExts = ['.jsx', '.tsx', '.js', '.ts', '.css'];
+    const baseName = abs.split('/').pop().toLowerCase();
+    if (baseName) {
+      for (const key of Object.keys(__files)) {
+        const keyBase = (key.split('/').pop() || '').toLowerCase();
+        if (keyBase === baseName && !isSelfImport(key)) return key;
+        if (keyBase === baseName && isSelfImport(key)) skippedSelfImport = true;
+        for (const ext of fileExts) {
+          if (keyBase === baseName + ext && !isSelfImport(key)) return key;
+          if (keyBase === baseName + ext && isSelfImport(key)) skippedSelfImport = true;
+        }
+      }
+    }
+    if (skippedSelfImport) {
+      throw new Error('Self import detected: ' + to + ' resolved back to ' + from + '. Use src/main.jsx for createRoot code and src/App.jsx for the App component.');
     }
     throw new Error('Module not found: ' + to + ' (from ' + (from || '<entry>') + ')');
   }
 
   function requireModule(request, fromPath) {
-    const resolved = resolvePath(fromPath, request);
+    let resolved;
+    try {
+      resolved = resolvePath(fromPath, request);
+    } catch (e) {
+      // 모델이 종종 존재하지 않는 CSS/이미지/폰트 import 를 남김. 에셋 import 는 무시.
+      if (/\\.(css|scss|sass|less|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf)$/i.test(request)) {
+        return {};
+      }
+      throw e;
+    }
     if (__builtins[resolved]) return __builtins[resolved];
     if (__modules[resolved]) return __modules[resolved].exports;
 
-    const src = __files[resolved];
+    let src = __files[resolved];
     if (resolved.endsWith('.css')) {
       const style = document.createElement('style');
       style.textContent = src;
@@ -1552,10 +2128,13 @@ ${tailwindScript}
     if (__compiledSet.has(resolved)) {
       transformed = src;
     } else {
+    src = __patchReactSource(src, resolved);
     const isTS = /\\.tsx?$/.test(resolved);
+    // classic runtime 으로 고정 — automatic runtime 은 react/jsx-runtime 의 jsx/jsxs 를 요구하는데
+    // UMD 번들에는 노출되지 않음. classic 은 React.createElement 만 쓰므로 안전.
     const presets = isTS
-      ? [['react'], ['typescript', { allExtensions: true, isTSX: true }]]
-      : [['react']];
+      ? [['react', { runtime: 'classic' }], ['typescript', { allExtensions: true, isTSX: true }]]
+      : [['react', { runtime: 'classic' }]];
     try {
       transformed = Babel.transform(src, {
         presets: presets,
@@ -1588,10 +2167,7 @@ ${tailwindScript}
         ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(AppComp));
       ` : '// entry 파일이 자체적으로 createRoot 호출'}
     } catch (e) {
-      document.getElementById('root').innerHTML =
-        '<pre style="color:#c00;white-space:pre-wrap;font-family:ui-monospace,monospace;padding:12px;background:#fff5f5;border:1px solid #fcc;border-radius:6px">' +
-        (e && e.message ? e.message : String(e)) +
-        (e && e.stack ? '\\n\\n' + e.stack : '') + '</pre>';
+      __showPreviewError(e);
     }
   })();
 <\/script>
@@ -1845,7 +2421,8 @@ function collectMessageFiles(contentEl) {
   contentEl.querySelectorAll('.code-block').forEach(blk => {
     const path = blk.dataset.lang || '';
     const content = blk.dataset.code || '';
-    addPreviewFile(files, path, content);
+    const finalPath = addPreviewFile(files, path, content);
+    if (finalPath) blk.dataset.lang = finalPath;
   });
   return files;
 }
@@ -1859,7 +2436,7 @@ function refreshCombinedPreviewButton(contentEl) {
 
 async function openCombinedPreview(files) {
   // React 파일이 섞여 있으면 React 빌더, 아니면 HTML 결합 빌더
-  const hasReact = Object.keys(files).some(p => /\.(jsx|tsx)$/i.test(p));
+  const hasReact = hasReactPreviewFiles(files);
   let srcdoc;
   let langLabel;
   let entryPath = '';
@@ -1958,6 +2535,8 @@ function sendMessage() {
   chatInput.value = '';
   chatInput.style.height = 'auto';
   updateSendBtn();
+  // iOS Safari: 전송 시 blur → 키보드 닫히면서 확대된 뷰포트 복원
+  chatInput.blur();
 
   renderChatList();
   renderMessages();
@@ -2009,7 +2588,7 @@ function updateStreamingContent(contentEl, text) {
   contentEl.innerHTML = parsed.html;
   parsed.codeBlocks.forEach((cb, i) => {
     const marker = contentEl.querySelector(`[data-code-marker="${i}"]`);
-    const block = createCodeBlock(cb.code, cb.lang);
+    const block = createCodeBlock(cb.code, cb.lang, cb);
     if (marker) marker.replaceWith(block);
     else contentEl.appendChild(block);
   });
@@ -2082,6 +2661,7 @@ function updateLoadingLabel(_loadingDiv, _text) {
  * — 문서 스타일 편집 카드
  * ════════════════════════════════════════════ */
 function askSpecConfirmation(spec) {
+  return Promise.resolve(spec);
   return new Promise((resolve) => {
     const card = document.createElement('div');
     card.className = 'message assistant';
@@ -2486,7 +3066,7 @@ async function generateResponse() {
       const specHeader =
         '<details><summary>📋 확정된 명세서 (클릭하여 펼치기)</summary>\n\n' +
         '```json\n' + JSON.stringify(approved, null, 2) + '\n```\n\n</details>\n\n';
-      fullContent = specHeader + fullContent;
+      fullContent = fullContent;
       }
     } else {
       // ── 자동 모드: 기존 통합 엔드포인트 ──────────────────

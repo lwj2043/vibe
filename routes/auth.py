@@ -14,6 +14,8 @@ import threading
 from collections import deque
 from pathlib import Path
 from time import monotonic
+
+SESSION_TTL = 3600.0  # 1 hour
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -28,8 +30,8 @@ PBKDF2_ITERS = 600_000
 # 인증 시 허용되는 과거 반복 수(점진 마이그레이션).
 PBKDF2_LEGACY_ITERS = (200_000,)
 
-# token -> username
-SESSIONS: dict[str, str] = {}
+# token -> (username, created_at)
+SESSIONS: dict[str, tuple[str, float]] = {}
 
 # ---------------------------------------------------------------------------
 # Rate limiting (per-IP, in-process)
@@ -173,20 +175,11 @@ def require_session(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
     if token and token in SESSIONS:
-        return SESSIONS[token]
-
-    # In local development the browser token can outlive the in-memory session
-    # map after a server restart. Restore it from the saved username header.
-    username = request.headers.get("x-vibe-user", "").strip()
-    if token and username:
-        users = _load_users()
-        if any(user.get("username") == username for user in users):
-            SESSIONS[token] = username
+        username, created_at = SESSIONS[token]
+        if monotonic() - created_at <= SESSION_TTL:
             return username
-
-    if not token or token not in SESSIONS:
-        raise HTTPException(status_code=401, detail="인증이 필요합니다")
-    return SESSIONS[token]
+        SESSIONS.pop(token, None)
+    raise HTTPException(status_code=401, detail="인증이 필요합니다")
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +206,7 @@ def login(payload: LoginPayload, request: Request) -> dict[str, str]:
         _record_attempt(_login_attempts, ip)
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다")
     token = secrets.token_urlsafe(32)
-    SESSIONS[token] = payload.username
+    SESSIONS[token] = (payload.username, monotonic())
     return {"token": token, "username": payload.username}
 
 

@@ -1,14 +1,26 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
 
-# Claude / IDE
+# Local agents / IDE
 .claude/
+.vscode/
 
 # Local config & secrets
+.env
+.env.*
+!.env.example
 config.json
 pipelines/config.json
 users.json
+user.json
 
 # Per-user runtime data
 chat_logs/*
@@ -17,11 +29,13 @@ specs/*
 !specs/.gitkeep
 user_memory/*
 !user_memory/.gitkeep
+logs/
 
 # Logs
+*.log
 server.err.log
 server.out.log
 server.log
 
-# Tests (로컬 전용 스크립트)
-tests/
+# Local-only launch helpers
+start_server.bat

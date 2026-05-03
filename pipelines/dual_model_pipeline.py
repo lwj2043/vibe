@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import (
     external_data,
+    ollama_client,
     openai_client,
     preview_builder,
     router,
@@ -30,7 +31,7 @@ from .prompts import (
     FIX_USER_TEMPLATE,
     REVIEW_SYSTEM_PROMPT,
     REVIEW_USER_TEMPLATE,
-    ROUTER_SYSTEM_PROMPT,
+    SINGLE_PASS_SYSTEM_PROMPT,
     SPEC_SYSTEM_PROMPT,
     VISUAL_REVIEW_SYSTEM_PROMPT,
     VISUAL_REVIEW_USER_TEMPLATE,
@@ -51,6 +52,12 @@ def _status(text: str) -> str:
     return f"{_STATUS_BEGIN}STATUS:{text}{_STATUS_END}"
 
 
+def _coerce_ollama_keep_alive(value: Any) -> Any:
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        return int(value.strip())
+    return value
+
+
 class Pipeline:
     """Single-model pipeline: spec, code, review, and fixes use one endpoint."""
 
@@ -58,18 +65,35 @@ class Pipeline:
         model_config = ConfigDict(protected_namespaces=())
 
         model: str = Field(
-            default=str(config_value("model", default="gemma-4-31b-it")),
-            description="OpenAI-compatible model name used for every stage.",
+            default=str(
+                config_value(
+                    "model",
+                    "plan_model",
+                    "dev_model",
+                    default="gemma4:e4b",
+                )
+            ),
+            description="Ollama model name used for planning, chat, and review stages.",
         )
         base_url: str = Field(
             default=str(
                 config_value(
+                    "ollama_url",
                     "base_url",
                     "openai_base_url",
-                    default="http://192.168.100.13:8000/v1",
+                    default="http://localhost:11434",
                 )
             ),
-            description="OpenAI-compatible base URL including /v1.",
+            description="Ollama base URL, for example http://localhost:11434.",
+        )
+        ollama_keep_alive: Any = Field(
+            default=_coerce_ollama_keep_alive(
+                config_value("ollama_keep_alive", "keep_alive", default=-1)
+            ),
+            description=(
+                "Ollama keep_alive value. -1 keeps the model loaded until "
+                "it is manually stopped."
+            ),
         )
         api_key: str = Field(
             default=str(config_value("api_key", default="")),
@@ -93,18 +117,26 @@ class Pipeline:
 
         # Back-compat fields retained because some callers may introspect these names.
         coder_model: str = Field(
-            default=str(config_value("coder_model", "model", default="gemma-4-31b-it")),
-            description="Legacy field. Single-model mode uses `model` instead.",
+            default=str(
+                config_value(
+                    "coder_model",
+                    "dev_model",
+                    "model",
+                    default="gemma4:e4b",
+                )
+            ),
+            description="Ollama model name used for code-generation stages.",
         )
         coder_base_url: str = Field(
             default=str(
                 config_value(
+                    "ollama_url",
                     "coder_base_url",
                     "base_url",
-                    default="http://192.168.100.13:8000/v1",
+                    default="http://localhost:11434",
                 )
             ),
-            description="Legacy field. Single-model mode uses `base_url` instead.",
+            description="Ollama base URL used for code-generation stages.",
         )
 
     _ROUTE_CACHE_MAX = 128
@@ -138,25 +170,18 @@ class Pipeline:
         images: list[bytes] | None = None,
     ) -> str:
         if images:
-            return openai_client.run_async(
-                openai_client.call_llm_with_image(
-                    base_url=self.valves.base_url,
-                    model=self.valves.model,
-                    api_key=self.valves.api_key or None,
-                    system=system,
-                    user_text=user,
-                    image_png_bytes=images,
-                    messages=messages,
-                )
+            logger.warning(
+                "image inputs are not supported by the Ollama chat path; ignoring %d image(s)",
+                len(images),
             )
-        return openai_client.run_async(
-            openai_client.call_llm(
-                base_url=self.valves.base_url,
+        return ollama_client.run_async(
+            ollama_client.call_ollama(
+                ollama_url=self.valves.base_url,
                 model=self.valves.model,
-                api_key=self.valves.api_key or None,
                 system=system,
                 user=user,
                 messages=messages,
+                keep_alive=self.valves.ollama_keep_alive,
             )
         )
 
@@ -169,15 +194,14 @@ class Pipeline:
         coder: bool = False,
         temperature: float | None = None,
     ) -> Generator[str, None, None]:
-        del coder
-        yield from openai_client.stream_llm_sync(
-            base_url=self.valves.base_url,
-            model=self.valves.model,
-            api_key=self.valves.api_key or None,
+        del temperature
+        yield from ollama_client.stream_ollama_sync(
+            ollama_url=self.valves.coder_base_url if coder else self.valves.base_url,
+            model=self.valves.coder_model if coder else self.valves.model,
             system=system,
             user=user,
             messages=messages,
-            temperature=temperature,
+            keep_alive=self.valves.ollama_keep_alive,
         )
 
     @staticmethod
@@ -198,29 +222,10 @@ class Pipeline:
         if key in self._route_cache:
             return self._route_cache[key]
 
-        try:
-            raw_response = self._call(
-                system=ROUTER_SYSTEM_PROMPT,
-                user=user_message,
-            )
-            parsed = utils.parse_json(raw_response)
-            route = router.normalize_route(parsed, user_message)
-            route["source"] = "llm"
-        except Exception:
-            route = router.keyword_fallback_route(user_message)
-            route["confidence"] = "high"
-            route["source"] = "keyword_error"
-            self._cache_route(key, route)
-            return route
-
-        if route.get("confidence") == "low":
-            fallback = router.keyword_fallback_route(user_message)
-            fallback["confidence"] = "high"
-            fallback["source"] = "keyword_lowconf"
-            route = fallback
-
-        self._cache_route(key, route)
-        return route
+        scored_route = router.score_route(user_message)
+        scored_route["source"] = "score"
+        self._cache_route(key, scored_route)
+        return scored_route
 
     def _cache_route(self, key: str, route: dict[str, Any]) -> None:
         if len(self._route_cache) >= self._ROUTE_CACHE_MAX:
@@ -362,7 +367,37 @@ class Pipeline:
             "[원본 기술 명세 JSON]\n"
             f"{json.dumps(spec, ensure_ascii=False, indent=2)}"
         )
-        yield from self._stream(system=CODER_SYSTEM_PROMPT, user=prompt, temperature=0.1)
+        yield from self._stream(
+            system=CODER_SYSTEM_PROMPT,
+            user=prompt,
+            coder=True,
+            temperature=0.1,
+        )
+
+    def _generate_simple_code(
+        self,
+        user_message: str,
+        messages: list[dict[str, Any]] | None,
+        images: list[bytes] | None = None,
+    ) -> Generator[str, None, None]:
+        if images:
+            reply = self._call(
+                system=SINGLE_PASS_SYSTEM_PROMPT,
+                user=user_message,
+                messages=messages,
+                images=images,
+            )
+            if reply:
+                yield reply
+            return
+
+        yield from self._stream(
+            system=SINGLE_PASS_SYSTEM_PROMPT,
+            user=user_message,
+            messages=messages,
+            coder=True,
+            temperature=0.1,
+        )
 
     def _fix_code(
         self,
@@ -391,6 +426,7 @@ class Pipeline:
             system=FIX_CODER_SYSTEM_PROMPT,
             user=prompt,
             messages=messages,
+            coder=True,
             temperature=0.1,
         )
 
@@ -569,9 +605,10 @@ class Pipeline:
 
         if prelude:
             yield prelude
+        if code:
+            yield from utils.stream_text(code)
         if final_note:
             yield final_note
-        yield from utils.stream_text(code)
 
     def pipe(
         self,
@@ -600,6 +637,18 @@ class Pipeline:
                 messages=messages,
                 images=images,
             )
+            return
+
+        if route["intent"] == "simple_code":
+            yield _status("Simple code generation")
+            try:
+                yield from self._generate_simple_code(
+                    user_message,
+                    messages=messages,
+                    images=images,
+                )
+            except Exception as exc:
+                yield self._format_model_error("Simple code generation", exc)
             return
 
         yield _status("명세 생성 중")
@@ -634,6 +683,7 @@ class Pipeline:
             + "<details><summary>생성된 명세 보기</summary>\n\n"
             + f"```json\n{spec_preview}\n```\n\n</details>\n\n"
         )
+        spec_prelude = ""
         yield from self._run_spec_code_review_loop(
             spec,
             messages=messages,

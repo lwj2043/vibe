@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 CHAT_LOGS_DIR = ROOT / "chat_logs"
+STREAM_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+    "Content-Encoding": "identity",
+}
 
 # 회전 임계치: log.jsonl 가 이 크기를 넘으면 gzip 으로 회전한다.
 _LOG_ROTATE_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -339,7 +344,11 @@ def chat(payload: ChatPayload, request: Request) -> StreamingResponse:
             logger.exception("chat stream 실패")
             yield f"\n\n[서버 오류] {exc}"
 
-    return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
+    return StreamingResponse(
+        stream(),
+        media_type="text/plain; charset=utf-8",
+        headers=STREAM_HEADERS,
+    )
 
 
 @router.post("/api/chat/spec")
@@ -361,7 +370,8 @@ def chat_generate_spec(payload: ChatPayload, request: Request) -> dict[str, Any]
                     reply_chunks.append(chunk)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"mode": "chat", "reply": "".join(reply_chunks)}
+        reply = re.sub(r"<think>.*?</think>", "", "".join(reply_chunks), flags=re.DOTALL).strip()
+        return {"mode": "chat", "reply": reply}
 
     try:
         spec = pipeline.generate_spec(
@@ -417,4 +427,8 @@ def chat_generate_code(
             logger.exception("chat stream 실패")
             yield f"\n\n[서버 오류] {exc}"
 
-    return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
+    return StreamingResponse(
+        stream(),
+        media_type="text/plain; charset=utf-8",
+        headers=STREAM_HEADERS,
+    )

@@ -1166,6 +1166,13 @@
     .user-message-wrap { max-width: 95%; }
     #input-area { padding: 6px 10px 10px; }
     .welcome-title { font-size: 18px; }
+    /* iOS Safari: font-size < 16px 인 입력 요소에 포커스 시 자동 확대 방지 */
+    #chat-input,
+    #search-input,
+    .run-mode-select,
+    .select-input,
+    .text-input,
+    .textarea-input { font-size: 16px; }
   }
 
   /* details 명세서 블록 */
