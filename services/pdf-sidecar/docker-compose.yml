@@ -1,0 +1,26 @@
+services:
+  pdf-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vibe-pdf-sidecar:latest
+    container_name: vibe-pdf-sidecar
+    ports:
+      # 호스트(Vibe 본체) 만 접근 가능. 외부 노출 X. host:container — 호스트는 8102.
+      - "127.0.0.1:8102:8002"
+    environment:
+      PORT_PROJECT_INTERNAL_TOKEN: "${VIBE_INTERNAL_TOKEN:-}"
+      PDF_SERVICE_PUBLIC_BASE_URL: "http://127.0.0.1:8102"
+      PORT_PROJECT_DOWNLOAD_TOKEN_TTL_SECONDS: "${VIBE_DOWNLOAD_TOKEN_TTL:-3600}"
+      PDF_SERVICE_MAX_INPUT_BYTES: "2097152"
+    volumes:
+      - pdf-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pdf-data:

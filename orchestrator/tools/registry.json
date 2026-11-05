@@ -1,0 +1,59 @@
+{
+  "$schema_doc": "Vibe 도구 레지스트리. Brainrot tools/registry.json 패턴 차용. 도구 한 개를 추가/제거하려면 이 배열만 수정하세요.",
+  "$field_doc": {
+    "name": "내부 식별자 (snake_case)",
+    "kind": "inline | sidecar",
+    "module": "(inline 일 때만) Python 모듈 경로",
+    "url_env": "(sidecar 일 때만) 사이드카 URL 환경변수 이름",
+    "default_url": "(sidecar 일 때만) 환경변수 미설정 시 기본 URL",
+    "function_filter": "노출할 함수 이름 CSV",
+    "access": "public | allowlist",
+    "allowlist_emails_env": "(allowlist 일 때만) 허용 이메일 CSV 환경변수 이름",
+    "display_name": "UI 에 표시될 이름",
+    "description": "UI 에 표시될 설명",
+    "system_prompt_line": "기본 모델 system prompt 에 추가될 한 줄 설명 (없으면 빈 문자열)"
+  },
+  "tools": [
+    {
+      "name": "web",
+      "kind": "inline",
+      "module": "pipelines.web_extract",
+      "function_filter": "fetch_as_markdown",
+      "access": "public",
+      "display_name": "웹 본문 추출",
+      "description": "사용자가 외부 웹 URL을 직접 제공하면 그 페이지의 본문을 Markdown으로 추출합니다. 인터넷 검색 기능은 제공하지 않습니다.",
+      "system_prompt_line": "- 웹 본문 추출(web): 외부 URL 만 처리, 키워드 검색 X."
+    },
+    {
+      "name": "text",
+      "kind": "inline",
+      "module": "pipelines.text_export",
+      "function_filter": "write_text_file,list_text_formats",
+      "access": "public",
+      "display_name": "텍스트 export",
+      "description": "사용자가 준 텍스트 본문을 선택한 포맷(txt/md/html/docx/csv/json)으로 파일 저장하고, 브라우저에서 바로 다운로드/프리뷰할 수 있는 임시 URL을 반환합니다. 링크는 VIBE_DOWNLOAD_TOKEN_TTL(기본 1시간) 동안 유효합니다.",
+      "system_prompt_line": "- 텍스트 export(text): 사용자가 텍스트를 파일로 저장하길 원하면 호출. 응답의 download_url 과 preview_url 을 그대로 전달."
+    },
+    {
+      "name": "pdf",
+      "kind": "sidecar",
+      "url_env": "VIBE_PDF_SIDECAR_URL",
+      "default_url": "http://127.0.0.1:8102",
+      "function_filter": "markdown_to_pdf,html_to_pdf,pdf_service_info",
+      "access": "public",
+      "display_name": "PDF 출력",
+      "description": "Markdown 또는 HTML 본문을 받아 PDF 파일로 렌더링합니다. 한국어 폰트와 코드 하이라이팅을 지원합니다.",
+      "system_prompt_line": "- PDF 출력(pdf): 사용자가 글이나 보고서를 PDF로 만들길 원하면 호출. 응답의 download_url 과 preview_url 을 그대로 전달."
+    },
+    {
+      "name": "code_preview",
+      "kind": "inline",
+      "module": "pipelines.preview_builder",
+      "function_filter": "extract_code_blocks,build_combined_html",
+      "access": "public",
+      "display_name": "코드 프리뷰",
+      "description": "HTML/CSS/JS 코드 블록 또는 파일 맵을 하나의 HTML로 합쳐 브라우저에서 바로 열 수 있는 프리뷰 URL을 반환합니다.",
+      "system_prompt_line": "- 코드 프리뷰(code_preview): HTML/CSS/JS 결과물을 미리보기로 열어야 하면 호출. 응답의 preview_url 을 그대로 전달."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+# Docker Compose for the two services that are awkward to run on bare Windows venv:
+#   - pdf-sidecar  (WeasyPrint needs GTK/Pango/Cairo runtime)
+#   - open-webui   (PyPI wheels currently require Python 3.11/3.12, our system has 3.13)
+#
+# orchestrator (8000) and web-sidecar (8004) keep running in venvs from start.ps1.
+#
+# Notes:
+#   - Containers reach the host (orchestrator/web-sidecar on the Windows host) via
+#     host.docker.internal — this is built-in on Docker Desktop for Windows.
+#   - Both ports are bound to 127.0.0.1 only; Cloudflare Tunnel handles public exposure.
+
+services:
+  pdf-sidecar:
+    build:
+      context: ./pdf-sidecar
+      dockerfile: Dockerfile
+    image: vibe-pdf-sidecar:latest
+    container_name: vibe-pdf-sidecar
+    ports:
+      # host:container — 컨테이너 내부는 8002 그대로, 호스트만 8102 로 노출.
+      - "127.0.0.1:8102:8002"
+    environment:
+      PORT_PROJECT_INTERNAL_TOKEN: "${VIBE_INTERNAL_TOKEN:-}"
+      PDF_SERVICE_PUBLIC_BASE_URL: "http://127.0.0.1:8102"
+      PORT_PROJECT_DOWNLOAD_TOKEN_TTL_SECONDS: "${VIBE_DOWNLOAD_TOKEN_TTL:-3600}"
+      PDF_SERVICE_MAX_INPUT_BYTES: "2097152"
+    volumes:
+      - pdf-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - vibe-net
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: vibe-open-webui
+    ports:
+      # host:container — Open WebUI 내부는 8080 고정, 호스트만 3100 으로 노출.
+      - "127.0.0.1:3100:8080"
+    environment:
+      # Point Open WebUI at the orchestrator's OpenAI-compatible /v1 endpoint
+      # which lives on the host (port 8100). host.docker.internal resolves to the
+      # host on Docker Desktop / Windows.
+      OPENAI_API_BASE_URL: "http://host.docker.internal:8100/v1"
+      OPENAI_API_KEY: "${VIBE_INTERNAL_TOKEN:-}"
+      DEFAULT_MODELS: "vibe-auto"
+      DEFAULT_PINNED_MODELS: "vibe-auto"
+      # Self-hosted, no telemetry, no auto-updates.
+      WEBUI_AUTH: "true"
+      ENABLE_OPENAI_API: "true"
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAPI_SERVERS: "true"
+      USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS: "true"
+      USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_SHARING: "true"
+      USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING: "true"
+      # Long generations (visual review loop, code generation): bump default
+      # client/server timeout to match orchestrator's worst-case path.
+      AIOHTTP_CLIENT_TIMEOUT: "600"
+      # Persist database, settings, uploaded files inside this volume.
+      DATA_DIR: "/app/backend/data"
+    volumes:
+      # Keep Open WebUI chats/settings in the project directory so restarts
+      # cannot accidentally switch to a different Docker named volume.
+      - ../data/open-webui:/app/backend/data
+    extra_hosts:
+      # Some Docker Desktop versions need this to be explicit.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - vibe-net
+    depends_on:
+      - pdf-sidecar
+
+volumes:
+  pdf-data:
+
+networks:
+  vibe-net:
+    driver: bridge

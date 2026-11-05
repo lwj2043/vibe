@@ -1,0 +1,14 @@
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+pydantic>=2.6,<3.0
+httpx>=0.27,<1.0
+# Playwright는 비주얼 리뷰(스크린샷)에서만 사용 — 미설치 시 텍스트 리뷰로 폴백
+playwright>=1.40,<2.0
+# PDF 첨부 텍스트 추출. 미설치 시 PDF 첨부는 무시됨(서버 동작에는 영향 없음)
+pypdf>=4.0,<6.0
+# 웹 본문 추출 — fallback 용. 평소엔 web-sidecar(8004) 가 처리.
+readability-lxml>=0.8
+markdownify>=0.11
+# 텍스트 export (docx/html 포맷용)
+python-docx>=1.1
+markdown>=3.5

@@ -1,0 +1,12 @@
+{
+  "_comment": "vLLM OpenAI-compatible configuration. base_url should include /v1.",
+  "base_url": "http://192.168.100.13:8000/v1",
+  "model": "gemma-4-31b-it",
+  "plan_model": "gemma-4-31b-it",
+  "dev_model": "gemma-4-31b-it",
+  "coder_model": "gemma-4-31b-it",
+  "api_key": "",
+  "max_review_iterations": 1,
+  "review_safety_cap": 1,
+  "enable_visual_review": false
+}

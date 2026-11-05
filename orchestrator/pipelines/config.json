@@ -1,0 +1,9 @@
+{
+  "_comment": "OpenAI 호환 VLM 엔드포인트 — 단일 모델로 명세/코드/검토(시각 포함) 전 단계 수행",
+  "base_url": "http://192.168.100.13:8000/v1",
+  "model": "gemma-4-31b-it",
+  "api_key": "",
+  "max_review_iterations": 2,
+  "review_safety_cap": 2,
+  "enable_visual_review": false
+}

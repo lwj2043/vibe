@@ -1,0 +1,40 @@
+# venvs (4-way split per scripts/bootstrap_venvs.ps1)
+venv/
+venv-pdf/
+venv-web/
+venv-webui/
+.venv/
+.venv-web/
+
+# runtime data
+data/chat_logs/
+data/specs/
+data/user_memory/
+data/exports/
+data/open-webui/
+data/users.json
+logs/
+*.log
+
+# secrets
+.vibe_token
+.env
+.env.*
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# misc
+*.tmp
+*.bak
